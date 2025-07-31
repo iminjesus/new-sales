@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>July Sales</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { font-family: Arial; margin: 20px; background-color: #f4f4f4; }
+    h1, h2 { color: #333; }
+    .controls { margin-bottom: 20px; }
+    .controls button, .controls select {
+      margin: 5px;
+      padding: 5px 10px;
+    }
+    .chart-row {
+      display: flex;
+      justify-content: space-around;
+      flex-wrap: wrap;
+    }
+    .chart-box {
+      width: 45%;
+      min-width: 400px;
+    }
+  </style>
+</head>
+<body>
+  <h1>July Sales</h1>
+
+  <div class="controls">
+    <div>
+      Region:
+      <button onclick="selectRegion('ALL')">ALL</button>
+      <button onclick="selectRegion('NSW')">NSW</button>
+      <button onclick="selectRegion('QLD')">QLD</button>
+      <button onclick="selectRegion('VIC')">VIC</button>
+      <button onclick="selectRegion('WA')">WA</button>
+    </div>
+    <div>
+      Salesman Name:
+      <select id="salesman_name">
+        <option value="ALL">ALL</option>
+      </select>
+      <button onclick="drawAllCharts()">Apply</button>
+    </div>
+  </div>
+
+  <div class="chart-row">
+    <div class="chart-box">
+      <h2>Daily billing_in_SKU</h2>
+      <canvas id="dailyChart"></canvas>
+    </div>
+    <div class="chart-box">
+      <h2>Cumulative billing_in_SKU</h2>
+      <canvas id="cumulativeChart"></canvas>
+    </div>
+  </div>
+
+  <h2>By Product</h2>
+  <div class="chart-row">
+    <div class="chart-box">
+      <h3>Daily Product %</h3>
+      <canvas id="productChartDaily"></canvas>
+    </div>
+    <div class="chart-box">
+      <h3>Cumulative Product %</h3>
+      <canvas id="productChartCumulative"></canvas>
+    </div>
+  </div>
+
+  <script>
+    let dailyChartInstance, cumulativeChartInstance;
+    let productChartDailyInstance, productChartCumulativeInstance;
+    let currentRegion = 'ALL';
+
+    const colorPalette = [
+      "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+      "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
+      "#aec7e8", "#ffbb78", "#98df8a", "#ff9896", "#c5b0d5"
+    ];
+
+    function populateSalesmen(region = "ALL") {
+      const regionSalesmen = {
+        "NSW": ["Hamid Jallis", "LUTTRELL STEVE", "Hulley Gary", "Lee Don"],
+        "QLD": ["Lopez Randall", "Spires Steven", "Sampson Kieren", "Marsh Aaron"],
+        "VIC": ["Bellotto Nicola", "Bilston Kelley", "Gultjaeff Jason", "Hobkirk Calvin"],
+        "WA": ["Fruci Davide", "Gilbert Michael"],
+        "ALL": ["Hamid Jallis", "LUTTRELL STEVE", "Hulley Gary", "Lee Don", "Lopez Randall", "Spires Steven", "Sampson Kieren", "Marsh Aaron", "Bellotto Nicola", "Bilston Kelley", "Gultjaeff Jason", "Hobkirk Calvin", "Fruci Davide", "Gilbert Michael"]
+      };
+
+      const select = document.getElementById('salesman_name');
+      select.innerHTML = `<option value="ALL">ALL</option>`;
+      regionSalesmen[region].forEach(name => {
+        select.innerHTML += `<option value="${name}">${name}</option>`;
+      });
+    }
+
+    async function selectRegion(region) {
+      currentRegion = region;
+      populateSalesmen(region);
+    }
+
+    async function drawAllCharts() {
+      const salesman = document.getElementById("salesman_name").value;
+      const [skuData, pgDaily, pgCumulative] = await Promise.all([
+        fetch(`/api/sku_trend?region=${currentRegion}&salesman=${encodeURIComponent(salesman)}`).then(r => r.json()),
+        fetch(`/api/product_group_percentage?region=${currentRegion}&salesman=${encodeURIComponent(salesman)}`).then(r => r.json()),
+        fetch(`/api/product_group_cumulative?region=${currentRegion}&salesman=${encodeURIComponent(salesman)}`).then(r => r.json())
+      ]);
+
+      drawSKUCharts(skuData, salesman);
+      drawProductChart(pgDaily, 'productChartDaily', productChartDailyInstance, true);
+      drawProductChart(pgCumulative, 'productChartCumulative', productChartCumulativeInstance, false);
+    }
+
+    function drawSKUCharts(data, salesman) {
+      const labels = data.map(d => d.billing_date);
+      const dailyValues = data.map(d => parseInt(d.daily_qty));
+      const cumValues = data.map(d => parseInt(d.cumulative_qty));
+
+      if (dailyChartInstance) dailyChartInstance.destroy();
+      if (cumulativeChartInstance) cumulativeChartInstance.destroy();
+
+      dailyChartInstance = new Chart(document.getElementById('dailyChart'), {
+        type: 'bar',
+        data: { labels, datasets: [{ label: `Daily billing_in_SKU (${currentRegion} - ${salesman})`, data: dailyValues, backgroundColor: 'mediumpurple' }] },
+        options: { responsive: true, scales: { y: { beginAtZero: true }, x: { ticks: { maxRotation: 45 } } } }
+      });
+
+      cumulativeChartInstance = new Chart(document.getElementById('cumulativeChart'), {
+        type: 'bar',
+        data: { labels, datasets: [{ label: `Cumulative billing_in_SKU (${currentRegion} - ${salesman})`, data: cumValues, backgroundColor: 'teal' }] },
+        options: { responsive: true, scales: { y: { beginAtZero: true }, x: { ticks: { maxRotation: 45 } } } }
+      });
+    }
+
+    function drawProductChart(data, canvasId, chartRef, isDaily) {
+      const dates = [...new Set(data.map(d => d.billing_date))];
+      const groups = [...new Set(data.map(d => d.Product_Group))];
+      const groupData = {};
+      groups.forEach(g => groupData[g] = Array(dates.length).fill(0));
+
+      data.forEach(row => {
+        const i = dates.indexOf(row.billing_date);
+        if (i > -1) groupData[row.Product_Group][i] = row.percentage;
+      });
+
+      const datasets = groups.map((group, i) => ({
+        label: group,
+        data: groupData[group],
+        backgroundColor: colorPalette[i % colorPalette.length],
+        stack: 'stack1'
+      }));
+
+      if (chartRef) chartRef.destroy();
+      const newChart = new Chart(document.getElementById(canvasId), {
+        type: 'bar',
+        data: { labels: dates, datasets },
+        options: {
+          responsive: true,
+          scales: {
+            x: { stacked: true, ticks: { maxRotation: 45 }, title: { display: true, text: 'Billing Date (DD-MM-YY)' } },
+            y: { stacked: true, beginAtZero: true, max: 100, title: { display: true, text: 'Percentage (%)' } }
+          },
+          plugins: {
+            legend: { position: 'top' },
+            tooltip: { mode: 'index', intersect: false },
+            title: { display: true, text: isDaily ? 'Daily Product %' : 'Cumulative Product %' }
+          }
+        }
+      });
+
+      if (isDaily) productChartDailyInstance = newChart;
+      else productChartCumulativeInstance = newChart;
+    }
+
+    // Initial load
+    selectRegion('ALL');
+    drawAllCharts();
+  </script>
+</body>
+</html>
