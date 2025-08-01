@@ -41,6 +41,42 @@
       </select>
       <button onclick="drawAllCharts()">Apply</button>
     </div>
+    <div>
+      Sold-to Group:
+      <select id="sold_to_group" onchange="updateSoldToNames()">
+        <option value="ALL">ALL</option>
+        <option value="ATD">ATD</option>
+        <option value="ATR">ATR</option>
+        <option value="AJT">AJT</option>
+        <option value="ACM">ACM</option>
+        <option value="ACL">ACL</option>
+        <option value="ACT">ACT</option>
+        <option value="ACU">ACU</option>
+        <option value="AGT">AGT</option>
+        <option value="AHT">AHT</option>
+        <option value="ALT">ALT</option>
+        <option value="AMT">AMT</option>
+        <option value="AOT">AOT</option>
+        <option value="APT">APT</option>
+        <option value="ART">ART</option>
+        <option value="AST">AST</option>
+        <option value="ATT">ATT</option>
+        <option value="AUT">AUT</option>
+        <option value="AVT">AVT</option>
+        <option value="AWT">AWT</option>
+        <option value="AZT">AZT</option>
+        <option value="BAT">BAT</option>
+        <option value="BCT">BCT</option>
+        <option value="BHT">BHT</option>
+        <option value="BLT">BLT</option>
+      </select>
+    </div>
+
+    <div>
+      Sold-to Name:
+      <select id="sold_to"></select>
+      <button onclick="drawAllCharts()">Apply</button>
+    </div>
   </div>
 
   <div class="chart-row">
@@ -98,12 +134,36 @@
       populateSalesmen(region);
     }
 
-    async function drawAllCharts() {
+    async function updateSoldToNames() {
+      const group = document.getElementById("sold_to_group").value;
+      const soldToDropdown = document.getElementById("sold_to");
+
+      try {
+        const response = await fetch(`/api/sold_to_names?sold_to_group=${group}`);
+        const names = await response.json();
+
+        soldToDropdown.innerHTML = "<option value='ALL'>ALL</option>";
+        names.forEach(name => {
+          const option = document.createElement("option");
+          option.value = name;
+          option.textContent = name;
+          soldToDropdown.appendChild(option);
+        });
+      } catch (error) {
+        console.error("Error loading Sold-to names:", error);
+      }
+    }
+        async function drawAllCharts() {
       const salesman = document.getElementById("salesman_name").value;
+      const soldToGroup = document.getElementById("sold_to_group").value;
+      const soldTo = document.getElementById("sold_to").value;
+
+      const queryParams = `region=${currentRegion}&salesman=${encodeURIComponent(salesman)}&sold_to_group=${encodeURIComponent(soldToGroup)}&sold_to=${encodeURIComponent(soldTo)}`;
+
       const [skuData, pgDaily, pgCumulative] = await Promise.all([
-        fetch(`/api/sku_trend?region=${currentRegion}&salesman=${encodeURIComponent(salesman)}`).then(r => r.json()),
-        fetch(`/api/product_group_percentage?region=${currentRegion}&salesman=${encodeURIComponent(salesman)}`).then(r => r.json()),
-        fetch(`/api/product_group_cumulative?region=${currentRegion}&salesman=${encodeURIComponent(salesman)}`).then(r => r.json())
+        fetch(`/api/sku_trend?${queryParams}`).then(r => r.json()),
+        fetch(`/api/product_group_percentage?${queryParams}`).then(r => r.json()),
+        fetch(`/api/product_group_cumulative?${queryParams}`).then(r => r.json())
       ]);
 
       drawSKUCharts(skuData, salesman);
@@ -174,7 +234,7 @@
 
     // Initial load
     selectRegion('ALL');
-    drawAllCharts();
+    updateSoldToNames();
   </script>
 </body>
 </html>

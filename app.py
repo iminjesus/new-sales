@@ -22,16 +22,20 @@ def serve_index():
 def get_sku_trend():
     region = request.args.get("region")
     salesman = request.args.get("salesman")
-
+    sold_to_group = request.args.get("sold_to_group")
+    sold_to = request.args.get("sold_to")
+    
     try:
         conn = get_connection()
         cursor = conn.cursor(dictionary=True)
 
         base_query = """
             SELECT 
-                DATE_FORMAT(billing_date, '%d-%m-%y') AS billing_date,
+                DATE_FORMAT(billing_date, '%d-%m-%y') AS billing_date, 
                 SUM(billqty_in_SKU) AS daily_qty,
-                SUM(SUM(billqty_in_SKU)) OVER (ORDER BY billing_date) AS cumulative_qty
+                SUM(net_value) as daily_amt,
+                SUM(SUM(billqty_in_SKU)) OVER (ORDER BY billing_date) AS cumulative_qty,
+                SUM(SUM(net_value)) OVER (ORDER BY billing_date) AS cumulative_amt
             FROM julysales
             WHERE 1=1
         """
@@ -44,6 +48,12 @@ def get_sku_trend():
         if salesman and salesman != "ALL":
             conditions.append("salesman_name = %s")
             params.append(salesman)
+        if sold_to_group and sold_to_group != "ALL":
+            conditions.append("sold_to_grp3 = %s")
+            params.append(sold_to_group)             
+        if sold_to and sold_to != "ALL":
+            conditions.append("sold_to_name = %s")
+            params.append(sold_to)            
 
         if conditions:
             base_query += " AND " + " AND ".join(conditions)
@@ -57,11 +67,35 @@ def get_sku_trend():
         return jsonify(rows)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    
+@app.route("/api/sold_to_names")
+def get_sold_to_names():
+    sold_to_group = request.args.get("sold_to_group")
+
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        if sold_to_group and sold_to_group != "ALL":
+            query = "SELECT DISTINCT sold_to_name FROM julysales WHERE sold_to_grp3 = %s ORDER BY sold_to_name"
+            cursor.execute(query, (sold_to_group,))
+        else:
+            query = "SELECT DISTINCT sold_to_name FROM julysales ORDER BY sold_to_name"
+            cursor.execute(query)
+
+        names = [row[0] for row in cursor.fetchall()]
+        cursor.close()
+        conn.close()
+        return jsonify(names)
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/api/product_group_percentage")
 def get_product_group_percentage():
     region = request.args.get("region")
     salesman = request.args.get("salesman")
+    sold_to = request.args.get("sold_to")
 
     try:
         conn = get_connection()
@@ -85,7 +119,9 @@ def get_product_group_percentage():
         if salesman and salesman != "ALL":
             conditions.append("j.salesman_name = %s")
             params.append(salesman)
-
+        if sold_to and sold_to != "ALL":
+            conditions.append("j.sold_to_name = %s")
+            params.append(sold_to)
         if conditions:
             query += " AND " + " AND ".join(conditions)
 
@@ -107,7 +143,7 @@ def get_product_group_percentage():
 def get_product_group_cumulative():
     region = request.args.get("region")
     salesman = request.args.get("salesman")
-
+    sold_to = request.args.get("sold_to")
     try:
         conn = get_connection()
         cursor = conn.cursor(dictionary=True)
@@ -131,7 +167,9 @@ def get_product_group_cumulative():
         if salesman and salesman != "ALL":
             conditions.append("j.salesman_name = %s")
             params.append(salesman)
-
+        if sold_to and sold_to != "ALL":
+            conditions.append("j.sold_to_name = %s")
+            params.append(sold_to)
         if conditions:
             query += " AND " + " AND ".join(conditions)
 
