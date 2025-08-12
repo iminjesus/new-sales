@@ -1,240 +1,280 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>July Sales</title>
+  <meta charset="utf-8" />
+  <title>July Sales Dashboard</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
-    body { font-family: Arial; margin: 20px; background-color: #f4f4f4; }
-    h1, h2 { color: #333; }
-    .controls { margin-bottom: 20px; }
-    .controls button, .controls select {
-      margin: 5px;
-      padding: 5px 10px;
-    }
-    .chart-row {
-      display: flex;
-      justify-content: space-around;
-      flex-wrap: wrap;
-    }
-    .chart-box {
-      width: 45%;
-      min-width: 400px;
-    }
+    body { font-family: Arial; margin: 16px; background:#f4f4f4; }
+    h1, h2 { margin: 6px 0; color:#333; }
+    .controls { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:10px 0 14px; }
+    .btn { padding:6px 10px; border:1px solid #ccc; background:#fafafa; border-radius:6px; cursor:pointer; }
+    .btn.active { background:#0a66ff; color:#fff; border-color:#0a66ff; }
+    select { padding:6px 10px; }
+    .row { display:flex; flex-wrap:wrap; gap:16px; }
+    .box { background:#fff; border-radius:8px; box-shadow:0 1px 6px rgba(0,0,0,.08); padding:12px; flex:1 1 520px; }
+    canvas { width:100%; height:360px; }
+    label { font-size:12px; color:#666; margin-right:4px; }
   </style>
 </head>
 <body>
-  <h1>July Sales</h1>
+  <h1>July Sales Dashboard</h1>
 
   <div class="controls">
-    <div>
-      Region:
-      <button onclick="selectRegion('ALL')">ALL</button>
-      <button onclick="selectRegion('NSW')">NSW</button>
-      <button onclick="selectRegion('QLD')">QLD</button>
-      <button onclick="selectRegion('VIC')">VIC</button>
-      <button onclick="selectRegion('WA')">WA</button>
-    </div>
-    <div>
-      Salesman Name:
-      <select id="salesman_name">
-        <option value="ALL">ALL</option>
-      </select>
-      <button onclick="drawAllCharts()">Apply</button>
-    </div>
-    <div>
-      Sold-to Group:
-      <select id="sold_to_group" onchange="updateSoldToNames()">
-        <option value="ALL">ALL</option>
-        <option value="ATD">ATD</option>
-        <option value="ATR">ATR</option>
-        <option value="AJT">AJT</option>
-        <option value="ACM">ACM</option>
-        <option value="ACL">ACL</option>
-        <option value="ACT">ACT</option>
-        <option value="ACU">ACU</option>
-        <option value="AGT">AGT</option>
-        <option value="AHT">AHT</option>
-        <option value="ALT">ALT</option>
-        <option value="AMT">AMT</option>
-        <option value="AOT">AOT</option>
-        <option value="APT">APT</option>
-        <option value="ART">ART</option>
-        <option value="AST">AST</option>
-        <option value="ATT">ATT</option>
-        <option value="AUT">AUT</option>
-        <option value="AVT">AVT</option>
-        <option value="AWT">AWT</option>
-        <option value="AZT">AZT</option>
-        <option value="BAT">BAT</option>
-        <option value="BCT">BCT</option>
-        <option value="BHT">BHT</option>
-        <option value="BLT">BLT</option>
-      </select>
+    <div id="metricBtns" class="controls" style="gap:6px;">
+      <button class="btn" data-metric="qty">Qty</button>
+      <button class="btn" data-metric="amount">Amount</button>
     </div>
 
-    <div>
-      Sold-to Name:
-      <select id="sold_to"></select>
-      <button onclick="drawAllCharts()">Apply</button>
+    <label>Group By:</label>
+    <select id="group_by">
+      <option value="region" selected>Region</option>
+      <option value="salesman">Salesman</option>
+      <option value="sold_to_group">Sold-to Group</option>
+      <option value="sold_to">Sold-to</option>
+      <option value="product_group">Product Group</option>
+    </select>
+
+    <label style="margin-left:10px;">Region:</label>
+    <div id="regionBtns" class="controls" style="gap:6px;">
+      <button class="btn" data-val="ALL">ALL</button>
+      <button class="btn" data-val="NSW">NSW</button>
+      <button class="btn" data-val="QLD">QLD</button>
+      <button class="btn" data-val="VIC">VIC</button>
+      <button class="btn" data-val="WA">WA</button>
     </div>
+
+    <label>Salesman:</label>
+    <select id="salesman_name"><option value="ALL">ALL</option></select>
+
+    <label>Sold-to Group:</label>
+    <select id="sold_to_group"><option value="ALL">ALL</option></select>
+
+    <label>Sold-to:</label>
+    <select id="sold_to"><option value="ALL">ALL</option></select>
+
+    <label>Product Group:</label>
+    <select id="product_group"><option value="ALL">ALL</option></select>
+
+    <button id="applyBtn" class="btn">Apply</button>
   </div>
 
-  <div class="chart-row">
-    <div class="chart-box">
-      <h2>Daily billing_in_SKU</h2>
-      <canvas id="dailyChart"></canvas>
-    </div>
-    <div class="chart-box">
-      <h2>Cumulative billing_in_SKU</h2>
-      <canvas id="cumulativeChart"></canvas>
-    </div>
+  <div class="row">
+    <div class="box"><h2 id="dailyTitle">Daily billing_in_SKU</h2><canvas id="dailyChart"></canvas></div>
+    <div class="box"><h2 id="cumTitle">Cumulative billing_in_SKU</h2><canvas id="cumulativeChart"></canvas></div>
+  </div>
+  <div class="row">
+    <div class="box"><h2>Stacked Daily Chart</h2><canvas id="stackedDailyChart"></canvas></div>
+    <div class="box"><h2>Stacked Daily % Chart</h2><canvas id="stackedDailyPercentChart"></canvas></div>
+  </div>
+  <div class="row">
+    <div class="box"><h2>Stacked Cumulative Chart</h2><canvas id="stackedCumulativeChart"></canvas></div>
+    <div class="box"><h2>Stacked Cumulative % Chart</h2><canvas id="stackedCumulativePercentChart"></canvas></div>
   </div>
 
-  <h2>By Product</h2>
-  <div class="chart-row">
-    <div class="chart-box">
-      <h3>Daily Product %</h3>
-      <canvas id="productChartDaily"></canvas>
-    </div>
-    <div class="chart-box">
-      <h3>Cumulative Product %</h3>
-      <canvas id="productChartCumulative"></canvas>
-    </div>
-  </div>
+<script>
+  // ==== State & constants ====
+  const COLORS = ["#1f77b4","#ff7f0e","#2ca02c","#d62728","#9467bd","#8c564b","#e377c2","#7f7f7f","#bcbd22","#17becf","#aec7e8","#ffbb78"];
+  const REGION_SALESMEN = {
+    NSW:["Hamid Jallis","LUTTRELL STEVE","Hulley Gary","Lee Don"],
+    QLD:["Lopez Randall","Spires Steven","Sampson Kieren","Marsh Aaron"],
+    VIC:["Bellotto Nicola","Bilston Kelley","Gultjaeff Jason","Hobkirk Calvin"],
+    WA:["Fruci Davide","Gilbert Michael"]
+  };
 
-  <script>
-    let dailyChartInstance, cumulativeChartInstance;
-    let productChartDailyInstance, productChartCumulativeInstance;
-    let currentRegion = 'ALL';
+  const filters = {
+    metric: "qty",            // NEW: qty | amount
+    group_by:"region",
+    region:"ALL",
+    salesman:"ALL",
+    sold_to_group:"ALL",
+    sold_to:"ALL",
+    product_group:"ALL"
+  };
 
-    const colorPalette = [
-      "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
-      "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
-      "#aec7e8", "#ffbb78", "#98df8a", "#ff9896", "#c5b0d5"
-    ];
+  let dailyInst, cumulativeInst, stackedDailyInst, stackedDailyPctInst, stackedCumInst, stackedCumPctInst;
 
-    function populateSalesmen(region = "ALL") {
-      const regionSalesmen = {
-        "NSW": ["Hamid Jallis", "LUTTRELL STEVE", "Hulley Gary", "Lee Don"],
-        "QLD": ["Lopez Randall", "Spires Steven", "Sampson Kieren", "Marsh Aaron"],
-        "VIC": ["Bellotto Nicola", "Bilston Kelley", "Gultjaeff Jason", "Hobkirk Calvin"],
-        "WA": ["Fruci Davide", "Gilbert Michael"],
-        "ALL": ["Hamid Jallis", "LUTTRELL STEVE", "Hulley Gary", "Lee Don", "Lopez Randall", "Spires Steven", "Sampson Kieren", "Marsh Aaron", "Bellotto Nicola", "Bilston Kelley", "Gultjaeff Jason", "Hobkirk Calvin", "Fruci Davide", "Gilbert Michael"]
-      };
-
-      const select = document.getElementById('salesman_name');
-      select.innerHTML = `<option value="ALL">ALL</option>`;
-      regionSalesmen[region].forEach(name => {
-        select.innerHTML += `<option value="${name}">${name}</option>`;
-      });
-    }
-
-    async function selectRegion(region) {
-      currentRegion = region;
-      populateSalesmen(region);
-    }
-
-    async function updateSoldToNames() {
-      const group = document.getElementById("sold_to_group").value;
-      const soldToDropdown = document.getElementById("sold_to");
-
-      try {
-        const response = await fetch(`/api/sold_to_names?sold_to_group=${group}`);
-        const names = await response.json();
-
-        soldToDropdown.innerHTML = "<option value='ALL'>ALL</option>";
-        names.forEach(name => {
-          const option = document.createElement("option");
-          option.value = name;
-          option.textContent = name;
-          soldToDropdown.appendChild(option);
-        });
-      } catch (error) {
-        console.error("Error loading Sold-to names:", error);
+  // ==== Helpers ====
+  const $ = s => document.querySelector(s);
+  const fetchJSON = u => fetch(u).then(r => r.json());
+  const setActive = (wrap,valAttr,val)=>[...wrap.querySelectorAll(".btn")].forEach(b=>b.classList.toggle("active", b.dataset[valAttr]===val));
+  function populateSelect(el, arr, includeAll=true){
+    el.innerHTML="";
+    if(includeAll){ const o=document.createElement("option"); o.value="ALL"; o.textContent="ALL"; el.appendChild(o); }
+    arr.forEach(v=>{ const o=document.createElement("option"); o.value=v; o.textContent=v; el.appendChild(o); });
+  }
+  function makeStacked(id, labels, datasets, title, max){
+    return new Chart(document.getElementById(id), {
+      type:"bar",
+      data:{ labels, datasets },
+      options:{
+        responsive:true, plugins:{ legend:{ position:"top" }},
+        scales:{ x:{ stacked:true }, y:{ stacked:true, beginAtZero:true, max: max ?? undefined, title:{ display:!!title, text:title }}}
       }
+    });
+  }
+
+  // ==== UI wiring ====
+  // Metric buttons
+  $("#metricBtns").addEventListener("click", (e)=>{
+    if(!e.target.classList.contains("btn")) return;
+    filters.metric = e.target.dataset.metric;
+    setActive($("#metricBtns"), "metric", filters.metric);
+    // tweak titles to reflect metric
+    $("#dailyTitle").textContent = filters.metric === "amount" ? "Daily Amount" : "Daily billing_in_SKU";
+    $("#cumTitle").textContent = filters.metric === "amount" ? "Cumulative Amount" : "Cumulative billing_in_SKU";
+  });
+
+  $("#group_by").addEventListener("change", ()=>{ filters.group_by = $("#group_by").value; });
+
+  $("#regionBtns").addEventListener("click", (e)=>{
+    if(!e.target.classList.contains("btn")) return;
+    filters.region = e.target.dataset.val; setActive($("#regionBtns"), "val", filters.region);
+    const all = Object.values(REGION_SALESMEN).flat();
+    const list = filters.region==="ALL" ? all : (REGION_SALESMEN[filters.region] || []);
+    populateSelect($("#salesman_name"), [...new Set(list)].sort());
+  });
+
+  $("#sold_to_group").addEventListener("change", async ()=>{
+    const names = await fetchJSON(`/api/sold_to_names?sold_to_group=${$("#sold_to_group").value}`);
+    populateSelect($("#sold_to"), names);
+  });
+
+  $("#applyBtn").addEventListener("click", drawAllCharts);
+
+  // ==== Init ====
+  async function initControls(){
+    // defaults
+    // metric default
+    setActive($("#metricBtns"), "metric", filters.metric);
+    // region default
+    setActive($("#regionBtns"), "val", filters.region);
+
+    // salesman options (all initially)
+    populateSelect($("#salesman_name"), [...new Set(Object.values(REGION_SALESMEN).flat())].sort());
+
+    // product groups from API
+    const groups = await fetchJSON("/api/product_group");
+    populateSelect($("#product_group"), groups);
+
+    // sold-to lists
+    populateSelect($("#sold_to_group"), ["ALL"], false); $("#sold_to_group").value="ALL";
+    const soldToNames = await fetchJSON("/api/sold_to_names?sold_to_group=ALL");
+    populateSelect($("#sold_to"), soldToNames);
+  }
+
+  // Get daily target aligned with current filters (amount-based)
+  async function fetchDailyTarget() {
+  const query = new URLSearchParams({
+    metric: filters.metric,            // <-- add this
+    region: filters.region,
+    salesman: filters.salesman,
+    sold_to_group: filters.sold_to_group,
+    sold_to: filters.sold_to,
+    product_group: filters.product_group
+  }).toString();
+  const res = await fetch(`/api/july_target?${query}`);
+  const data = await res.json();
+  return (data && typeof data.daily_target === "number") ? data.daily_target : null;
+}
+
+  // ==== Fetch → transform → draw ====
+  async function drawAllCharts(){
+    filters.salesman = $("#salesman_name").value || "ALL";
+    filters.sold_to_group = $("#sold_to_group").value || "ALL";
+    filters.sold_to = $("#sold_to").value || "ALL";
+    filters.product_group = $("#product_group").value || "ALL";
+
+    const qs = new URLSearchParams(filters).toString();
+    const [rows, dailyTarget] = await Promise.all([
+      fetchJSON(`/api/sku_trend?${qs}`),
+      fetchDailyTarget()
+    ]);
+
+    // Expect server to return fields for the chosen metric:
+    // - daily_value: per-group daily for metric
+    // - total_value: per-day total for metric
+    // - percentage : share% for metric
+    // (If your server still returns daily_qty, update the endpoint to honor ?metric)
+    const dates = [...new Set(rows.map(d=>d.billing_date))].sort();
+    const cats  = [...new Set(rows.map(d=>d.group_label))];
+
+    const daily={}, pct={}, cum={}, cumpct={};
+    cats.forEach(k=>{ daily[k]=Array(dates.length).fill(0); pct[k]=Array(dates.length).fill(0); cum[k]=Array(dates.length).fill(0); cumpct[k]=Array(dates.length).fill(0); });
+
+    rows.forEach(d=>{
+      const i = dates.indexOf(d.billing_date), k=d.group_label;
+      const val = Number(d.daily_value ?? d.daily_qty) || 0;   // fallback to qty if server not yet updated
+      daily[k][i] = val;
+      pct[k][i]   = Number(d.percentage) || 0;
+    });
+
+    cats.forEach(k=>{ let run=0; for(let i=0;i<dates.length;i++){ run+=daily[k][i]; cum[k][i]=run; }});
+    for(let i=0;i<dates.length;i++){
+      const tot = cats.reduce((a,k)=>a+cum[k][i],0)||1;
+      cats.forEach(k=>{ cumpct[k][i] = +(cum[k][i]/tot*100).toFixed(2); });
     }
-        async function drawAllCharts() {
-      const salesman = document.getElementById("salesman_name").value;
-      const soldToGroup = document.getElementById("sold_to_group").value;
-      const soldTo = document.getElementById("sold_to").value;
 
-      const queryParams = `region=${currentRegion}&salesman=${encodeURIComponent(salesman)}&sold_to_group=${encodeURIComponent(soldToGroup)}&sold_to=${encodeURIComponent(soldTo)}`;
+    const ds = (map)=> cats.map((k,i)=>({ label:k, data:map[k], backgroundColor:COLORS[i%COLORS.length], stack:"S" }));
 
-      const [skuData, pgDaily, pgCumulative] = await Promise.all([
-        fetch(`/api/sku_trend?${queryParams}`).then(r => r.json()),
-        fetch(`/api/product_group_percentage?${queryParams}`).then(r => r.json()),
-        fetch(`/api/product_group_cumulative?${queryParams}`).then(r => r.json())
-      ]);
+    const dailyTotal = dates.map((_,i)=> cats.reduce((a,k)=>a+daily[k][i],0));
+    const cumulativeTotal = dailyTotal.reduce((acc,v)=>{ acc.push((acc.at(-1)||0)+v); return acc; },[]);
 
-      drawSKUCharts(skuData, salesman);
-      drawProductChart(pgDaily, 'productChartDaily', productChartDailyInstance, true);
-      drawProductChart(pgCumulative, 'productChartCumulative', productChartCumulativeInstance, false);
-    }
+    // destroy old charts if any
+    [dailyInst,cumulativeInst,stackedDailyInst,stackedDailyPctInst,stackedCumInst,stackedCumPctInst].forEach(c=>c&&c.destroy());
 
-    function drawSKUCharts(data, salesman) {
-      const labels = data.map(d => d.billing_date);
-      const dailyValues = data.map(d => parseInt(d.daily_qty));
-      const cumValues = data.map(d => parseInt(d.cumulative_qty));
+    // Build target datasets (only show for Amount to avoid unit mismatch)
+    const showTarget = dailyTarget != null;
+    const dailyTargetLine = showTarget ? {
+      label:"Daily Target", type:"line",
+      data: dates.map(()=> dailyTarget),
+      borderColor:"red", borderWidth:2, pointRadius:0, fill:false
+    } : null;
 
-      if (dailyChartInstance) dailyChartInstance.destroy();
-      if (cumulativeChartInstance) cumulativeChartInstance.destroy();
+    const cumulativeTargetLine = showTarget ? {
+      label:"Cumulative Target", type:"line",
+      data: dates.map((_,i)=> dailyTarget*(i+1)),
+      borderColor:"red", borderWidth:2, pointRadius:0, fill:false
+    } : null;
 
-      dailyChartInstance = new Chart(document.getElementById('dailyChart'), {
-        type: 'bar',
-        data: { labels, datasets: [{ label: `Daily billing_in_SKU (${currentRegion} - ${salesman})`, data: dailyValues, backgroundColor: 'mediumpurple' }] },
-        options: { responsive: true, scales: { y: { beginAtZero: true }, x: { ticks: { maxRotation: 45 } } } }
-      });
+    const metricLabel = filters.metric === "amount" ? "Amount" : "SKU";
 
-      cumulativeChartInstance = new Chart(document.getElementById('cumulativeChart'), {
-        type: 'bar',
-        data: { labels, datasets: [{ label: `Cumulative billing_in_SKU (${currentRegion} - ${salesman})`, data: cumValues, backgroundColor: 'teal' }] },
-        options: { responsive: true, scales: { y: { beginAtZero: true }, x: { ticks: { maxRotation: 45 } } } }
-      });
-    }
+    // top 2
+    dailyInst = new Chart(document.getElementById("dailyChart"), {
+      type:"bar",
+      data:{
+        labels:dates,
+        datasets:[
+          { label:`Daily ${metricLabel}`, data:dailyTotal, backgroundColor:"#a78bfa" },
+          ...(dailyTargetLine ? [dailyTargetLine] : [])
+        ]
+      },
+      options:{ responsive:true, plugins:{ legend:{ position:"top"}}, scales:{ y:{ beginAtZero:true }}}
+    });
 
-    function drawProductChart(data, canvasId, chartRef, isDaily) {
-      const dates = [...new Set(data.map(d => d.billing_date))];
-      const groups = [...new Set(data.map(d => d.Product_Group))];
-      const groupData = {};
-      groups.forEach(g => groupData[g] = Array(dates.length).fill(0));
+    cumulativeInst = new Chart(document.getElementById("cumulativeChart"), {
+      type:"bar",
+      data:{
+        labels:dates,
+        datasets:[
+          { label:`Cumulative ${metricLabel}`, data:cumulativeTotal, backgroundColor:"#0ea5a3" },
+          ...(cumulativeTargetLine ? [cumulativeTargetLine] : [])
+        ]
+      },
+      options:{ responsive:true, plugins:{ legend:{ position:"top"}}, scales:{ y:{ beginAtZero:true }}}
+    });
 
-      data.forEach(row => {
-        const i = dates.indexOf(row.billing_date);
-        if (i > -1) groupData[row.Product_Group][i] = row.percentage;
-      });
+    // stacked 4
+    stackedDailyInst        = makeStacked("stackedDailyChart",              dates, ds(daily),  `Daily ${metricLabel}`);
+    stackedDailyPctInst     = makeStacked("stackedDailyPercentChart",       dates, ds(pct),    "Daily %", 100);
+    stackedCumInst          = makeStacked("stackedCumulativeChart",         dates, ds(cum),    `Cumulative ${metricLabel}`);
+    stackedCumPctInst       = makeStacked("stackedCumulativePercentChart",  dates, ds(cumpct), "Cumulative %", 100);
+  }
 
-      const datasets = groups.map((group, i) => ({
-        label: group,
-        data: groupData[group],
-        backgroundColor: colorPalette[i % colorPalette.length],
-        stack: 'stack1'
-      }));
-
-      if (chartRef) chartRef.destroy();
-      const newChart = new Chart(document.getElementById(canvasId), {
-        type: 'bar',
-        data: { labels: dates, datasets },
-        options: {
-          responsive: true,
-          scales: {
-            x: { stacked: true, ticks: { maxRotation: 45 }, title: { display: true, text: 'Billing Date (DD-MM-YY)' } },
-            y: { stacked: true, beginAtZero: true, max: 100, title: { display: true, text: 'Percentage (%)' } }
-          },
-          plugins: {
-            legend: { position: 'top' },
-            tooltip: { mode: 'index', intersect: false },
-            title: { display: true, text: isDaily ? 'Daily Product %' : 'Cumulative Product %' }
-          }
-        }
-      });
-
-      if (isDaily) productChartDailyInstance = newChart;
-      else productChartCumulativeInstance = newChart;
-    }
-
-    // Initial load
-    selectRegion('ALL');
-    updateSoldToNames();
-  </script>
+  (async function start(){
+    await initControls();
+    await drawAllCharts();
+  })();
+</script>
 </body>
 </html>
