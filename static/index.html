@@ -1,24 +1,30 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <title>July Sales Dashboard</title>
+
+  <!-- CDN for Chart.js -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <style>
-    body { font-family: Arial; margin: 16px; background:#f4f4f4; }
-    h1, h2 { margin: 6px 0; color:#333; }
-    .controls { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:10px 0 14px; }
-    .btn { padding:6px 10px; border:1px solid #ccc; background:#fafafa; border-radius:6px; cursor:pointer; }
-    .btn.active { background:#0a66ff; color:#fff; border-color:#0a66ff; }
-    select { padding:6px 10px; }
-    .row { display:flex; flex-wrap:wrap; gap:16px; }
-    .box { background:#fff; border-radius:8px; box-shadow:0 1px 6px rgba(0,0,0,.08); padding:12px; flex:1 1 520px; }
-    canvas { width:100%; height:360px; }
-    label { font-size:12px; color:#666; margin-right:4px; }
-  </style>
+
+  <!-- Absolute paths since index.html is served from "/" -->
+  <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <h1>July Sales Dashboard</h1>
+
+  <!-- Category buttons -->
+  <label>Category:</label>
+  <div id="catBtns" class="controls" style="gap:6px;">
+    <button class="btn active" data-val="ALL">All</button>
+    <button class="btn" data-val="PCLT">PCLT</button>
+    <button class="btn" data-val="TBR">TBR</button>
+    <button class="btn" data-val="18PLUS">18+ Inch</button>
+    <button class="btn" data-val="ISEG">EV/iSeg</button>
+    <button class="btn" data-val="SUV">SUV</button>
+    <button class="btn" data-val="LOWPROFILE">Low profile / Strategic TBR</button>
+    <button class="btn" data-val="HM">HM</button>
+  </div>
 
   <div class="controls">
     <div id="metricBtns" class="controls" style="gap:6px;">
@@ -49,9 +55,17 @@
 
     <label>Sold-to Group:</label>
     <select id="sold_to_group"><option value="ALL">ALL</option></select>
+    
 
-    <label>Sold-to:</label>
-    <select id="sold_to"><option value="ALL">ALL</option></select>
+    <label for="sold_to">Sold-to:</label>
+    <input type="text" id="sold_to" placeholder="Search Sold-to..." list="sold_to_list" />
+    <datalist id="sold_to_list"></datalist>
+
+    <label>View:</label>
+    <div id="topModeBtns" class="controls" style="gap:6px;">
+      <button class="btn active" data-mode="all">All</button>
+      <button class="btn" data-mode="top10">Top 10 (2025)</button>
+    </div>
 
     <label>Product Group:</label>
     <select id="product_group"><option value="ALL">ALL</option></select>
@@ -59,222 +73,60 @@
     <button id="applyBtn" class="btn">Apply</button>
   </div>
 
-  <div class="row">
-    <div class="box"><h2 id="dailyTitle">Daily billing_in_SKU</h2><canvas id="dailyChart"></canvas></div>
-    <div class="box"><h2 id="cumTitle">Cumulative billing_in_SKU</h2><canvas id="cumulativeChart"></canvas></div>
-  </div>
-  <div class="row">
-    <div class="box"><h2>Stacked Daily Chart</h2><canvas id="stackedDailyChart"></canvas></div>
-    <div class="box"><h2>Stacked Daily % Chart</h2><canvas id="stackedDailyPercentChart"></canvas></div>
-  </div>
-  <div class="row">
-    <div class="box"><h2>Stacked Cumulative Chart</h2><canvas id="stackedCumulativeChart"></canvas></div>
-    <div class="box"><h2>Stacked Cumulative % Chart</h2><canvas id="stackedCumulativePercentChart"></canvas></div>
+  <!-- KPI: Achievement % (overall) -->
+  <div class="kpi-row">
+    <div class="kpi-card" id="achvCard">
+      <div>
+        <div class="kpi-title">Achievement %</div>
+        <div class="kpi-sub" id="achvSub">Actual — / Target —</div>
+      </div>
+      <div class="kpi-right kpi-value" id="achvValue">--%</div>
+    </div>
   </div>
 
-<script>
-  // ==== State & constants ====
-  const COLORS = ["#1f77b4","#ff7f0e","#2ca02c","#d62728","#9467bd","#8c564b","#e377c2","#7f7f7f","#bcbd22","#17becf","#aec7e8","#ffbb78"];
-  const REGION_SALESMEN = {
-    NSW:["Hamid Jallis","LUTTRELL STEVE","Hulley Gary","Lee Don"],
-    QLD:["Lopez Randall","Spires Steven","Sampson Kieren","Marsh Aaron"],
-    VIC:["Bellotto Nicola","Bilston Kelley","Gultjaeff Jason","Hobkirk Calvin"],
-    WA:["Fruci Davide","Gilbert Michael"]
-  };
+  <!-- KPI: Achievement by Salesman -->
+  <h2 style="margin:8px 0 6px;">Achievement by Salesman</h2>
+  <div id="salesmanKpiGrid" class="kpi-grid"></div>
 
-  const filters = {
-    metric: "qty",            // NEW: qty | amount
-    group_by:"region",
-    region:"ALL",
-    salesman:"ALL",
-    sold_to_group:"ALL",
-    sold_to:"ALL",
-    product_group:"ALL"
-  };
+  <!-- ROW 1: base 2 charts -->
+  <div class="chart-row">
+    <div class="box"><h2 id="dailyTitle">Daily Sales</h2><canvas id="dailyChart"></canvas></div>
+    <div class="box"><h2 id="cumTitle">Cumulative Sales</h2><canvas id="cumulativeChart"></canvas></div>
+  </div>
 
-  let dailyInst, cumulativeInst, stackedDailyInst, stackedDailyPctInst, stackedCumInst, stackedCumPctInst;
+  <!-- ROW 2: stacked 2 charts -->
+  <div class="chart-row" style="margin-top:16px;">
+    <div class="box"><h2>Stacked Daily</h2><canvas id="stackedDailyChart"></canvas></div>
+    <div class="box"><h2>Stacked Cumulative</h2><canvas id="stackedCumulativeChart"></canvas></div>
+  </div>
 
-  // ==== Helpers ====
-  const $ = s => document.querySelector(s);
-  const fetchJSON = u => fetch(u).then(r => r.json());
-  const setActive = (wrap,valAttr,val)=>[...wrap.querySelectorAll(".btn")].forEach(b=>b.classList.toggle("active", b.dataset[valAttr]===val));
-  function populateSelect(el, arr, includeAll=true){
-    el.innerHTML="";
-    if(includeAll){ const o=document.createElement("option"); o.value="ALL"; o.textContent="ALL"; el.appendChild(o); }
-    arr.forEach(v=>{ const o=document.createElement("option"); o.value=v; o.textContent=v; el.appendChild(o); });
-  }
-  function makeStacked(id, labels, datasets, title, max){
-    return new Chart(document.getElementById(id), {
-      type:"bar",
-      data:{ labels, datasets },
-      options:{
-        responsive:true, plugins:{ legend:{ position:"top" }},
-        scales:{ x:{ stacked:true }, y:{ stacked:true, beginAtZero:true, max: max ?? undefined, title:{ display:!!title, text:title }}}
-      }
-    });
-  }
+  <!-- ROW 3: stacked % 2 charts -->
+  <div class="chart-row" style="margin-top:16px;">
+    <div class="box"><h2>Stacked Daily %</h2><canvas id="stackedDailyPercentChart"></canvas></div>
+    <div class="box"><h2>Stacked Cumulative %</h2><canvas id="stackedCumulativePercentChart"></canvas></div>
+  </div>
 
-  // ==== UI wiring ====
-  // Metric buttons
-  $("#metricBtns").addEventListener("click", (e)=>{
-    if(!e.target.classList.contains("btn")) return;
-    filters.metric = e.target.dataset.metric;
-    setActive($("#metricBtns"), "metric", filters.metric);
-    // tweak titles to reflect metric
-    $("#dailyTitle").textContent = filters.metric === "amount" ? "Daily Amount" : "Daily billing_in_SKU";
-    $("#cumTitle").textContent = filters.metric === "amount" ? "Cumulative Amount" : "Cumulative billing_in_SKU";
-  });
+  <!-- ROW 4: base 2 charts Monthly -->
+  <div class="chart-row" style="margin-top:16px;">
+    <div class="box"><h2>Monthly Sales</h2><canvas id="monthlyChart"></canvas></div>
+    <div class="box"><h2>Cumulative by Month</h2><canvas id="monthlyCumChart"></canvas></div>
+  </div>
 
-  $("#group_by").addEventListener("change", ()=>{ filters.group_by = $("#group_by").value; });
+  <!-- ROW 5: stacked 2 charts Monthly -->
+  <div class="chart-row" style="margin-top:16px;">
+    <div class="box"><h2>Stacked Monthly</h2><canvas id="stackedMonthlyChart"></canvas></div>
+    <div class="box"><h2>Stacked Cumulative by Month</h2><canvas id="stackedMonthlyCumChart"></canvas></div>
+  </div>
 
-  $("#regionBtns").addEventListener("click", (e)=>{
-    if(!e.target.classList.contains("btn")) return;
-    filters.region = e.target.dataset.val; setActive($("#regionBtns"), "val", filters.region);
-    const all = Object.values(REGION_SALESMEN).flat();
-    const list = filters.region==="ALL" ? all : (REGION_SALESMEN[filters.region] || []);
-    populateSelect($("#salesman_name"), [...new Set(list)].sort());
-  });
+  <!-- ROW 6: stacked % 2 charts monthly -->
+  <div class="chart-row" style="margin-top:16px;">
+    <div class="box"><h2>Stacked Monthly %</h2><canvas id="stackedMonthlyPercentChart"></canvas></div>
+    <div class="box"><h2>Stacked Cumulative by Month %</h2><canvas id="stackedMonthlyCumPercentChart"></canvas></div>
+  </div>
 
-  $("#sold_to_group").addEventListener("change", async ()=>{
-    const names = await fetchJSON(`/api/sold_to_names?sold_to_group=${$("#sold_to_group").value}`);
-    populateSelect($("#sold_to"), names);
-  });
+  <!-- tiny error bar to surface API issues -->
+  <div id="errbar" class="errbar" hidden></div>
 
-  $("#applyBtn").addEventListener("click", drawAllCharts);
-
-  // ==== Init ====
-  async function initControls(){
-    // defaults
-    // metric default
-    setActive($("#metricBtns"), "metric", filters.metric);
-    // region default
-    setActive($("#regionBtns"), "val", filters.region);
-
-    // salesman options (all initially)
-    populateSelect($("#salesman_name"), [...new Set(Object.values(REGION_SALESMEN).flat())].sort());
-
-    // product groups from API
-    const groups = await fetchJSON("/api/product_group");
-    populateSelect($("#product_group"), groups);
-
-    // sold-to lists
-    populateSelect($("#sold_to_group"), ["ALL"], false); $("#sold_to_group").value="ALL";
-    const soldToNames = await fetchJSON("/api/sold_to_names?sold_to_group=ALL");
-    populateSelect($("#sold_to"), soldToNames);
-  }
-
-  // Get daily target aligned with current filters (amount-based)
-  async function fetchDailyTarget() {
-  const query = new URLSearchParams({
-    metric: filters.metric,            // <-- add this
-    region: filters.region,
-    salesman: filters.salesman,
-    sold_to_group: filters.sold_to_group,
-    sold_to: filters.sold_to,
-    product_group: filters.product_group
-  }).toString();
-  const res = await fetch(`/api/july_target?${query}`);
-  const data = await res.json();
-  return (data && typeof data.daily_target === "number") ? data.daily_target : null;
-}
-
-  // ==== Fetch → transform → draw ====
-  async function drawAllCharts(){
-    filters.salesman = $("#salesman_name").value || "ALL";
-    filters.sold_to_group = $("#sold_to_group").value || "ALL";
-    filters.sold_to = $("#sold_to").value || "ALL";
-    filters.product_group = $("#product_group").value || "ALL";
-
-    const qs = new URLSearchParams(filters).toString();
-    const [rows, dailyTarget] = await Promise.all([
-      fetchJSON(`/api/sku_trend?${qs}`),
-      fetchDailyTarget()
-    ]);
-
-    // Expect server to return fields for the chosen metric:
-    // - daily_value: per-group daily for metric
-    // - total_value: per-day total for metric
-    // - percentage : share% for metric
-    // (If your server still returns daily_qty, update the endpoint to honor ?metric)
-    const dates = [...new Set(rows.map(d=>d.billing_date))].sort();
-    const cats  = [...new Set(rows.map(d=>d.group_label))];
-
-    const daily={}, pct={}, cum={}, cumpct={};
-    cats.forEach(k=>{ daily[k]=Array(dates.length).fill(0); pct[k]=Array(dates.length).fill(0); cum[k]=Array(dates.length).fill(0); cumpct[k]=Array(dates.length).fill(0); });
-
-    rows.forEach(d=>{
-      const i = dates.indexOf(d.billing_date), k=d.group_label;
-      const val = Number(d.daily_value ?? d.daily_qty) || 0;   // fallback to qty if server not yet updated
-      daily[k][i] = val;
-      pct[k][i]   = Number(d.percentage) || 0;
-    });
-
-    cats.forEach(k=>{ let run=0; for(let i=0;i<dates.length;i++){ run+=daily[k][i]; cum[k][i]=run; }});
-    for(let i=0;i<dates.length;i++){
-      const tot = cats.reduce((a,k)=>a+cum[k][i],0)||1;
-      cats.forEach(k=>{ cumpct[k][i] = +(cum[k][i]/tot*100).toFixed(2); });
-    }
-
-    const ds = (map)=> cats.map((k,i)=>({ label:k, data:map[k], backgroundColor:COLORS[i%COLORS.length], stack:"S" }));
-
-    const dailyTotal = dates.map((_,i)=> cats.reduce((a,k)=>a+daily[k][i],0));
-    const cumulativeTotal = dailyTotal.reduce((acc,v)=>{ acc.push((acc.at(-1)||0)+v); return acc; },[]);
-
-    // destroy old charts if any
-    [dailyInst,cumulativeInst,stackedDailyInst,stackedDailyPctInst,stackedCumInst,stackedCumPctInst].forEach(c=>c&&c.destroy());
-
-    // Build target datasets (only show for Amount to avoid unit mismatch)
-    const showTarget = dailyTarget != null;
-    const dailyTargetLine = showTarget ? {
-      label:"Daily Target", type:"line",
-      data: dates.map(()=> dailyTarget),
-      borderColor:"red", borderWidth:2, pointRadius:0, fill:false
-    } : null;
-
-    const cumulativeTargetLine = showTarget ? {
-      label:"Cumulative Target", type:"line",
-      data: dates.map((_,i)=> dailyTarget*(i+1)),
-      borderColor:"red", borderWidth:2, pointRadius:0, fill:false
-    } : null;
-
-    const metricLabel = filters.metric === "amount" ? "Amount" : "SKU";
-
-    // top 2
-    dailyInst = new Chart(document.getElementById("dailyChart"), {
-      type:"bar",
-      data:{
-        labels:dates,
-        datasets:[
-          { label:`Daily ${metricLabel}`, data:dailyTotal, backgroundColor:"#a78bfa" },
-          ...(dailyTargetLine ? [dailyTargetLine] : [])
-        ]
-      },
-      options:{ responsive:true, plugins:{ legend:{ position:"top"}}, scales:{ y:{ beginAtZero:true }}}
-    });
-
-    cumulativeInst = new Chart(document.getElementById("cumulativeChart"), {
-      type:"bar",
-      data:{
-        labels:dates,
-        datasets:[
-          { label:`Cumulative ${metricLabel}`, data:cumulativeTotal, backgroundColor:"#0ea5a3" },
-          ...(cumulativeTargetLine ? [cumulativeTargetLine] : [])
-        ]
-      },
-      options:{ responsive:true, plugins:{ legend:{ position:"top"}}, scales:{ y:{ beginAtZero:true }}}
-    });
-
-    // stacked 4
-    stackedDailyInst        = makeStacked("stackedDailyChart",              dates, ds(daily),  `Daily ${metricLabel}`);
-    stackedDailyPctInst     = makeStacked("stackedDailyPercentChart",       dates, ds(pct),    "Daily %", 100);
-    stackedCumInst          = makeStacked("stackedCumulativeChart",         dates, ds(cum),    `Cumulative ${metricLabel}`);
-    stackedCumPctInst       = makeStacked("stackedCumulativePercentChart",  dates, ds(cumpct), "Cumulative %", 100);
-  }
-
-  (async function start(){
-    await initControls();
-    await drawAllCharts();
-  })();
-</script>
+  <script src="/static/app.js" defer></script>
 </body>
 </html>
