@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify, send_from_directory
 import mysql.connector
 from time import time  # cache timestamps
-
+import os
 # --------------------------- tiny cache (unchanged) ---------------------------
 _KPI_CACHE = {}
 def cache_get(namespace: str, key: str, ttl: int = 60):
@@ -1459,4 +1459,5 @@ def quarterly_achievement():
 
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
-    app.run(debug=True)
+    port = int(os.getenv("PORT", 5000))   # Cloudtype probes 5000
+    app.run(host="0.0.0.0", port=port, debug=False)
