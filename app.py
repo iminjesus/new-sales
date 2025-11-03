@@ -1,5 +1,5 @@
 from flask import Flask, request, jsonify, send_from_directory
-import mysql.connector
+from mysql.connector import Error as MySQLError
 from time import time  # cache timestamps
 import os
 # --------------------------- tiny cache (unchanged) ---------------------------
@@ -147,10 +147,14 @@ def get_connection():
         "autocommit": True,
     }
     try:
-        return mysql.connector.connect(**cfg)
-    except mysql.connector.Error as e:
-        # temporary: don't kill the app, just log
-        print("DB connection failed:", e)
+        conn = mysql.connector.connect(**cfg)
+        # quick sanity check
+        conn.ping(reconnect=True, attempts=1, delay=0)
+        return conn
+    except MySQLError as e:
+        # Log and let the route return 503 instead of crashing
+        app.logger.error("DB connect failed (host=%s, db=%s): %s",
+                         cfg.get("host"), cfg.get("database"), e)
         return None
 
 # ---------------------------- category rules ---------------------------------
