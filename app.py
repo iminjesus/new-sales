@@ -135,22 +135,24 @@ def category_filters_monthly(alias: str, category: str):
 
     return joins, wh
 
-    
-
-# ------------------------------ app/bootstrap --------------------------------
 app = Flask(__name__, static_folder="static")
 
 def get_connection():
-    return mysql.connector.connect(
-        host=os.getenv("DB_HOST", "127.0.0.1"),
-        port=int(os.getenv("DB_PORT", "3306")),
-        user=os.getenv("DB_USER", "root"),
-        password=os.getenv("DB_PASS", ""),
-        database=os.getenv("DB_NAME", "my_new_database"),
-        autocommit=True
-    )
-    
-    
+    cfg = {
+        "host": os.getenv("DB_HOST", "127.0.0.1"),
+        "port": int(os.getenv("DB_PORT", "3306")),
+        "user": os.getenv("DB_USER", "root"),
+        "password": os.getenv("DB_PASS", ""),
+        "database": os.getenv("DB_NAME", "my_new_database"),
+        "autocommit": True,
+    }
+    try:
+        return mysql.connector.connect(**cfg)
+    except mysql.connector.Error as e:
+        # temporary: don't kill the app, just log
+        print("DB connection failed:", e)
+        return None
+
 # ---------------------------- category rules ---------------------------------
 
 
@@ -341,6 +343,8 @@ def kpi_snapshot():
     # -------- run queries
     try:
         conn = get_connection()
+        if conn is None:
+            return jsonify({"error": "db_unavailable"}), 503
         cur  = conn.cursor(dictionary=True)
 
         # Q1/Q2 actuals
