@@ -1,3 +1,16 @@
+// --- fast defaults ---
+
+Chart.defaults.animation = false;               // no animations
+Chart.defaults.responsiveAnimationDuration = 0;
+Chart.defaults.normalized = true;               // faster parsing
+Chart.defaults.elements.bar.borderWidth = 0;
+
+// turn value labels OFF (they’re expensive to draw)
+const SHOW_BAR_VALUES = false;
+if (SHOW_BAR_VALUES && !Chart.registry.plugins.get("showDataValues")) {
+  Chart.register(showDataValuesPlugin);
+}
+
 /* -------------------------- state & helpers -------------------------- */
 const COLORS=["#1f77b4","#ff7f0e","#2ca02c","#d62728","#9467bd","#8c564b","#e377c2","#7f7f7f","#bcbd22","#17becf","#aec7e8","#ffbb78"];
 const REGION_SALESMEN={
@@ -6,6 +19,7 @@ const REGION_SALESMEN={
   VIC:["Bellotto Nicola","Bilston Kelley","Gultjaeff Jason","Hobkirk Calvin"],
   WA:["Fruci Davide","Gilbert Michael"]
 };
+const fmt = (n) => (+n || 0).toLocaleString();
 
 // Normalise names so monthly & daily labels match exactly
 const norm = (s) => (s ?? "")
@@ -14,10 +28,21 @@ const norm = (s) => (s ?? "")
   .trim()
   .toUpperCase();
 
-const filters={metric:"qty",group_by:"region",region:"ALL",salesman:"ALL",sold_to_group:"ALL",sold_to:"ALL",product_group:"ALL",category:"ALL"};
+const filters={
+  metric:"qty",
+  group_by:"region",
+  region:"ALL",
+  salesman:"ALL",
+  sold_to_group:"ALL",
+  sold_to:"ALL",
+  ship_to:"ALL",          
+  product_group:"ALL",
+  pattern:"ALL",          
+  category:"ALL"
+};
 
-let dailyInst,cumulativeInst,monthlyInst,monthlyCumInst,
-    stackedDailyInst,stackedDailyPctInst,stackedCumInst,stackedCumPctInst,
+let dailyInst,dailyCumInst,monthlyInst,monthlyCumInst,yearlyInst,
+    stackedDailyInst,stackedDailyCumInst, stackedDailyPctInst, stackedDailyCumPctInst, stackedYearlyInst, stackedYearlyPctInst,
     stackedMonthlyInst, stackedMonthlyCumInst, stackedMonthlyPctInst, stackedMonthlyCumPctInst;
 
 const $=s=>document.querySelector(s);
@@ -42,6 +67,8 @@ const setActive=(wrap,attr,val)=>[...wrap.querySelectorAll(".btn")].forEach(b=>b
 function populateSelect(el,arr,includeAll=true){ el.innerHTML=""; if(includeAll){const o=document.createElement("option");o.value="ALL";o.textContent="ALL";el.appendChild(o);} arr.forEach(v=>{const o=document.createElement("option");o.value=v;o.textContent=v;el.appendChild(o);}); }
 function makeStacked(id,labels,datasets,title,max){ return new Chart(document.getElementById(id),{type:"bar",data:{labels,datasets},options:getCommonOptions(true, max, title)}); }
 const monthsLabels=()=>["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const daysLabels=()=>[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31];
+const yearsLabels=()=>[2021,2022,2023,2024];
 function toCumulative(arr){const out=[];let run=0;for(const v of arr){run+=(+v||0);out.push(run);}return out;}
 function cumPerGroup(map){ const out={}; for(const k in map){out[k]=toCumulative(map[k]);} return out;}
 
@@ -61,7 +88,19 @@ function keyForTopSet(){
     region:        filters.region,
     salesman:      filters.salesman,
     sold_to_group: filters.sold_to_group,
-    product_group: filters.product_group
+    sold_to:       filters.sold_to,   
+    ship_to:       filters.ship_to,   
+    product_group: filters.product_group,
+    pattern:       filters.pattern    
+  });
+}
+
+function populateDatalist(listId, items){
+  const list = document.getElementById(listId);
+  list.innerHTML = '';
+  (items||[]).forEach(v=>{
+    const o = document.createElement('option');
+    o.value = v; list.appendChild(o);
   });
 }
 
@@ -95,7 +134,7 @@ async function fetchTopSet2025(){
     group_by:      'sold_to'
   }).toString();
 
-  const monthlyRows = await fetchJSON(`/api/monthly_sales_breakdown?${backupQs}`);
+  const monthlyRows = await fetchJSON(`/api/monthly_reakdown?${backupQs}`);
   const sumBySoldTo = new Map(); // normalized name -> total
   monthlyRows.forEach(r => {
     const k = norm(r.group_label || 'UNKNOWN');
@@ -197,8 +236,10 @@ const showDataValuesPlugin = {
 
       meta.data.forEach((elem, idx) => {
         if (!elem) return;
-        const val = ds.data[idx];
-        if (val == null) return; // skip gaps
+        const raw = ds.data[idx];
+        const val = Number(raw);
+        if (raw == null || !Number.isFinite(val) || val === 0) return; // ← skip 0s
+
         const props = elem.getProps(["x", "y", "base"], true);
         const centerY = props.y + (props.base - props.y) / 2;
         ctx.fillStyle = color;
@@ -217,7 +258,7 @@ function getCommonOptions(stacked=false, yMax, yTitle){
   return {
     responsive:true,
     plugins:{
-      legend:{position:"top"},
+      legend:{position:"right"},
       tooltip:{
         callbacks:{
           title: function(items){
@@ -233,25 +274,37 @@ function getCommonOptions(stacked=false, yMax, yTitle){
     }
   };
 }
+// Collect the exact params your APIs expect
+function getFilterParams() {
+  // If you already have a global getFilterParams(), keep using it.
+  // This fallback matches your APIs: metric, category, region, salesman, sold_to_group, sold_to, product_group, ship_to, pattern
+  const $ = (sel) => document.querySelector(sel);
 
-// ---------- JULY LABELS ----------
-function julyLabels(year = 2025) {
-  const labels = [];
-  for (let d=1; d<=31; d++) {
-    const dd = String(d).padStart(2,'0');
-    const mm = '07';
-    const yy = String(year).slice(-2);
-    labels.push(`${dd}-${mm}-${yy}`);
-  }
-  return labels;
+  // Adjust selectors only if yours differ.
+  const metric        = (document.querySelector('[name="metric"]:checked')?.value || 'qty').toLowerCase();
+  const category      = (document.querySelector('.cat-btn.active')?.dataset?.cat || 'ALL').toUpperCase();
+  const region        = ($('#regionTabs .active')?.dataset?.region || 'ALL').toUpperCase();
+  const salesman      = ($('#salesmanSelect')?.value || 'ALL');
+  const sold_to_group = ($('#soldToGroup')?.value || 'ALL');
+  const sold_to       = ($('#soldTo')?.value || 'ALL');
+  const product_group = ($('#productGroup')?.value || 'ALL');
+  const ship_to       = ($('#shipTo')?.value || 'ALL');
+  const pattern       = ($('#patternInput')?.value || 'ALL');
+
+  return { metric, category, region, salesman, sold_to_group, sold_to, product_group, ship_to, pattern };
 }
+
+
+
+
+
 
 /* -------------------------- UI wiring -------------------------- */
 document.getElementById('catBtns').addEventListener("click",e=>{
   if(!e.target.classList.contains("btn"))return;
   filters.category=e.target.dataset.val;
   [...document.querySelectorAll("#catBtns .btn")].forEach(b=>b.classList.toggle("active",b.dataset.val===filters.category));
-  drawAll();
+  refreshAllWithKpi();
 });
 document.getElementById('metricBtns').addEventListener("click",e=>{
   if(!e.target.classList.contains("btn"))return;
@@ -259,11 +312,11 @@ document.getElementById('metricBtns').addEventListener("click",e=>{
   setActive(document.getElementById('metricBtns'),"metric",filters.metric);
   document.getElementById('dailyTitle').textContent = filters.metric==="amount"?"Daily Amount":"Daily Sales";
   document.getElementById('cumTitle').textContent   = filters.metric==="amount"?"Cumulative Amount":"Cumulative Sales";
-  drawAll();
+  refreshAllWithKpi();
 });
 document.getElementById('group_by').addEventListener("change",()=>{
   filters.group_by=document.getElementById('group_by').value;
-  drawAll();
+  refreshAllWithKpi();
 });
 document.getElementById('regionBtns').addEventListener("click",e=>{
   if(!e.target.classList.contains("btn"))return;
@@ -271,55 +324,269 @@ document.getElementById('regionBtns').addEventListener("click",e=>{
   const all=Object.values(REGION_SALESMEN).flat();
   const list=filters.region==="ALL"?all:(REGION_SALESMEN[filters.region]||[]);
   populateSelect(document.getElementById('salesman_name'),[...new Set(list)].sort());
+  filters.salesman = 'ALL';
+  document.getElementById('salesman_name').value = 'ALL';
+  refreshAllWithKpi();
 });
-document.getElementById('sold_to_group').addEventListener('change', async ()=>{
-  const names = await fetchJSON(`/api/sold_to_names?sold_to_group=${document.getElementById('sold_to_group').value}`);
-  const list = document.getElementById('sold_to_list');
-  list.innerHTML='';
-  names.forEach(n=>{ const o=document.createElement('option'); o.value=n; list.appendChild(o);});
-});
-document.getElementById('sold_to').addEventListener('input', (e) => { filters.sold_to = e.target.value || 'ALL'; });
-document.getElementById('topModeBtns').addEventListener('click', async (e)=>{
-  if (!e.target.classList.contains('btn')) return;
-  TOP_MODE = e.target.dataset.mode; // 'all' | 'top10'
-  setActive(document.getElementById('topModeBtns'), 'mode', TOP_MODE);
-  await drawAll();
-});
-document.getElementById('applyBtn').addEventListener('click',()=>drawAll());
 
-/* -------------------------- data fetchers -------------------------- */
-async function fetchDailyTarget(){
-  const query=new URLSearchParams({
-    metric:filters.metric, region:filters.region, salesman:filters.salesman,
-    sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, product_group:filters.product_group,
-    category:filters.category
-  }).toString();
-  const data = await fetchJSON(`/api/july_target?${query}`);
-  return (data && typeof data.daily_target==="number")? data.daily_target : null;
+document.getElementById('salesman_name').addEventListener('change', (e)=>{
+  filters.salesman = e.target.value || 'ALL';
+  refreshAllWithKpi();
+});
+document.getElementById('sold_to_group').addEventListener('change', async ()=>{  filters.sold_to_group = document.getElementById('sold_to_group').value || 'ALL';
+
+  const names = await fetchJSON(`/api/sold_to_names?sold_to_group=${document.getElementById('sold_to_group').value}`);
+  populateDatalist('sold_to_list', names);
+  await refreshShipTo(); // NEW: keep ship-to list in sync with group
+  refreshAllWithKpi();
+});
+
+// When SOLD_TO_GROUP changes you already reload sold_to options — keep as is.
+
+// SOLD-TO -> fetch Ship-to names under that Sold-to, enable input
+document.getElementById('sold_to').addEventListener('input', async (e) => {
+  filters.sold_to = e.target.value || 'ALL';
+   await refreshShipTo();
+  const shipInput = document.getElementById('ship_to');
+  const listId = 'ship_to_list';
+
+  if (filters.sold_to && filters.sold_to !== 'ALL') {
+    const qs = new URLSearchParams({ sold_to: filters.sold_to }).toString();
+    const names = await fetchJSON(`/api/ship_to_names?${qs}`);
+    populateDatalist(listId, names);
+    shipInput.disabled = false;
+  } else {
+    populateDatalist(listId, []);
+    shipInput.value = '';
+    shipInput.disabled = true;
+    filters.ship_to = 'ALL';
+  }
+  refreshAllWithKpi();
+});
+
+// Ship-to input -> mirror into filters
+document.getElementById('ship_to').addEventListener('input', (e)=>{
+  filters.ship_to = document.getElementById('ship_to').value || 'ALL';
+  refreshAllWithKpi();
+});
+
+// PRODUCT GROUP -> existing code… plus refresh patterns
+document.getElementById('product_group').addEventListener('change', async ()=>{
+  filters.product_group = document.getElementById('product_group').value || 'ALL';
+  await refreshPatterns();     // NEW
+  refreshAllWithKpi();
+});
+
+// PATTERN input -> mirror into filters
+document.getElementById('pattern').addEventListener('input', (e)=>{
+  filters.pattern = e.target.value || 'ALL';
+  refreshAllWithKpi();
+});
+
+async function refreshShipTo(){
+  const stg3 = document.getElementById('sold_to_group').value || 'ALL';
+  const sold = document.getElementById('sold_to').value || 'ALL';
+  const qs = new URLSearchParams({ sold_to_group: stg3, sold_to: sold }).toString();
+  const names = await fetchJSON(`/api/ship_to_names?${qs}`);
+  populateDatalist('ship_to_list', names);
+  refreshAllWithKpi();
 }
+
+// Load patterns for current product group
+async function refreshPatterns(){
+  const pg = document.getElementById('product_group').value || 'ALL';
+  const names = await fetchJSON(`/api/patterns?product_group=${encodeURIComponent(pg)}`);
+  populateDatalist('pattern_list', names);
+  refreshAllWithKpi();
+}
+
+
+// optional debounce helper
+function debounce(fn,ms){let t;return(...a)=>{clearTimeout(t);t=setTimeout(()=>fn(...a),ms)}}
+
+
+
+
+
+/* -------------------------- daily (Oct) – same structure as monthly -------------------------- */
+
+async function fetchDailySales(){
+  const qs = new URLSearchParams({
+    metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
+    sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
+    product_group:filters.product_group, pattern:filters.pattern
+  }).toString();
+  return fetchJSON(`/api/daily_sales?${qs}`);
+}
+
+async function fetchDailyBreakdownWithGroup(groupBy){
+  const qs = new URLSearchParams({
+    metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
+    sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
+    product_group:filters.product_group, pattern:filters.pattern, group_by: groupBy
+  }).toString();
+  return fetchJSON(`/api/daily_breakdown?${qs}`);
+}
+
+
+
+// totals (bar + cumulative), same shape as drawMonthlyTotals (no target for daily)
+async function drawDailyTotals(){
+  const [salesRows] = await Promise.all([ fetchDailySales() ]);
+  const labels   = daysLabels();
+  const sales    = labels.map((_,i)=> +((salesRows[i]?.value) || 0));
+  const salesCum = toCumulative(sales);
+
+  [dailyInst,dailyCumInst].forEach(c=>c&&c.destroy());
+
+
+  dailyInst = new Chart(document.getElementById("dailyChart"), {
+    type:"bar",
+    data:{ labels, datasets:[
+      { label: filters.metric==="amount"?"Daily Amount":"Daily Qty",
+        data:sales, backgroundColor:"#93c5fd", categoryPercentage:0.9, barPercentage:0.9 }
+    ]},
+    options:getCommonOptions(false, undefined, "Daily")
+  });
+
+  dailyCumInst = new Chart(document.getElementById("dailyCumChart"), {
+    type:"bar",
+    data:{ labels, datasets:[
+      { label: filters.metric==="amount"?"Cumulative Amount":"Cumulative Qty",
+        data:salesCum, backgroundColor:"#34d399", categoryPercentage:0.9, barPercentage:0.9 }
+    ]},
+    options:getCommonOptions(false, undefined, "Cumulative")
+  });
+}
+
+function buildDailyStacks(rows){
+  const labels = daysLabels();;
+  const groups = [...new Set(rows.map(r => r.group_label))];
+  const byGroup = {};
+  groups.forEach(g => byGroup[g] = Array(31).fill(0));
+  rows.forEach(r => {
+    const d = parseInt(r.day, 10);
+    if (d>=1 && d<=31) byGroup[r.group_label][d-1] += (+r.value || 0);
+  });
+  const datasets = groups.map((g,i)=>({
+    label:g,
+    data:byGroup[g],
+    backgroundColor:COLORS[i%COLORS.length],
+    stack:"S", categoryPercentage:0.9, barPercentage:0.9
+  }));
+  return { labels, groups, byGroup, datasets };
+}
+
+function toPercentStacksN(byKey, N){
+  const keys = Object.keys(byKey);
+  const pct = {}; keys.forEach(k => pct[k] = Array(N).fill(0));
+  for (let i=0; i<N; i++){
+    const tot = keys.reduce((a,k)=> a + (+byKey[k][i]||0), 0) || 1;
+    keys.forEach(k => pct[k][i] = +((byKey[k][i] / tot) * 100).toFixed(2));
+  }
+  return pct;
+}
+
+
+// stacked (value / cumulative / % / cumulative %) — identical to monthly version
+async function drawDailyStacked(){
+  const effectiveGroup = filters.group_by;
+  const rows = await fetchDailyBreakdownWithGroup(effectiveGroup);
+  
+  if (!rows || !rows.length){
+    
+    const totals = await fetchDailySales();
+    const labels = daysLabels();;
+    const data=totals.map(r=>+r.value||0);
+    const cum = toCumulative(data);
+    stackedDailyInst = makeStacked("stackedDailyChart", labels, [
+      { label:"Total", data, backgroundColor:"#a78bfa", stack:"S", categoryPercentage:0.9, barPercentage:0.9 }
+    ], "Daily");
+
+    stackedDailyPctInst = makeStacked("stackedDailyPercentChart", labels, [
+      { label:"Total %", data: labels.map(()=>100), backgroundColor:"#a78bfa", stack:"S", categoryPercentage:0.9, barPercentage:0.9 }
+    ], "Daily %", 100);
+
+    
+    // IMPORTANT: write to the same IDs you use in HTML
+    stackedDailyCumInst = makeStacked("stackedDailyCumChart", labels, [
+      { label:"Total", data:cum, backgroundColor:"#10b981", stack:"S", categoryPercentage:0.9, barPercentage:0.9 }
+    ], "Cumulative by Day");
+
+    stackedDailyCumPctInst = makeStacked("stackedDailyCumPercentChart", labels, [
+      { label:"Total %", data: labels.map(()=>100), backgroundColor:"#10b981", stack:"S", categoryPercentage:0.9, barPercentage:0.9 }
+    ], "Cumulative %", 100);
+
+    return;
+  }
+
+  // Build stacks
+  let { labels, groups, byGroup, datasets } = buildDailyStacks(rows);
+
+  // Optional Top10 reduction (sold_to only), same as monthly
+  if (TOP_MODE === 'top10' && effectiveGroup === 'sold_to'){
+    const topSet  = await ensureTopSet();
+    const reduced = reduceToTopSmart(groups, byGroup, topSet);
+    groups  = reduced.groups;
+    byGroup = reduced.map;
+    datasets = groups.map((g,i)=>({
+      label:g, data:byGroup[g], backgroundColor:COLORS[i%COLORS.length],
+      stack:"S", categoryPercentage:0.9, barPercentage:0.9
+    }));
+  }
+
+  const byGroupCum   = cumPerGroup(byGroup);
+  const datasetsCum  = groups.map((g,i)=>({ label:g, data:byGroupCum[g], backgroundColor:COLORS[i%COLORS.length], stack:"S", categoryPercentage:0.9, barPercentage:0.9 }));
+  const pct          = toPercentStacksN(byGroup, 31);
+  const pctCum       = toPercentStacksN(byGroupCum, 31);
+  const datasetsPct  = groups.map((g,i)=>({ label:g, data:pct[g],    backgroundColor:COLORS[i%COLORS.length], stack:"S", categoryPercentage:0.9, barPercentage:0.9 }));
+  const datasetsPctC = groups.map((g,i)=>({ label:g, data:pctCum[g], backgroundColor:COLORS[i%COLORS.length], stack:"S", categoryPercentage:0.9, barPercentage:0.9 }));
+
+  [stackedDailyInst, stackedDailyCumInst, stackedDailyPctInst, stackedDailyCumPctInst]
+    .forEach(c=>c&&c.destroy());
+
+  stackedDailyInst = new Chart(document.getElementById("stackedDailyChart"), {
+    type:"bar", data:{ labels, datasets }, options:getCommonOptions(true, undefined, "Daily")
+  });
+  // IMPORTANT: match the IDs in your HTML (second box in row 1)
+  stackedDailyCumInst = new Chart(document.getElementById("stackedDailyCumChart"), {
+    type:"bar", data:{ labels, datasets:datasetsCum }, options:getCommonOptions(true, undefined, "Cumulative by Day")
+  });
+  stackedDailyPctInst = new Chart(document.getElementById("stackedDailyPercentChart"), {
+    type:"bar", data:{ labels, datasets:datasetsPct }, options:getCommonOptions(true, 100, "Daily %")
+  });
+  stackedDailyCumPctInst = new Chart(document.getElementById("stackedDailyCumPercentChart"), {
+    type:"bar", data:{ labels, datasets:datasetsPctC }, options:getCommonOptions(true, 100, "Cumulative %")
+  });
+}
+
+/* -------------------------- monthly charts -------------------------- */
+
 async function fetchMonthlySales(){
   const qs=new URLSearchParams({
     metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
-    sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, product_group:filters.product_group
+    sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
+    product_group:filters.product_group, pattern:filters.pattern
   }).toString();
   return fetchJSON(`/api/monthly_sales?${qs}`);
 }
 async function fetchMonthlyBreakdownWithGroup(groupBy){
   const params = {
     metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
-    sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, product_group:filters.product_group,
-    group_by:groupBy
+    sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
+    product_group:filters.product_group, pattern:filters.pattern, group_by: groupBy
   };
   const qs=new URLSearchParams(params).toString();
-  return fetchJSON(`/api/monthly_sales_breakdown?${qs}`);
+  return fetchJSON(`/api/monthly_breakdown?${qs}`);
 }
 
-/* -------------------------- monthly charts -------------------------- */
 async function drawMonthlyTotals(){
   const [salesRows,targetRows]=await Promise.all([
     fetchMonthlySales(),
     fetchJSON(`/api/monthly_target?${new URLSearchParams({
-      metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman, sold_to_group:filters.sold_to_group
+      metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
+      sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
+      product_group:filters.product_group, pattern:filters.pattern
     }).toString()}`)
   ]);
   const labels=monthsLabels();
@@ -395,6 +662,11 @@ async function drawMonthlyStacked(){
     const reduced = reduceToTopSmart(groups, byGroup, topSet);
     groups = reduced.groups;
     byGroup = reduced.map;
+    // Find the last month index that has *any* data across groups (0–11)
+    const lastMonth = (()=>{ const arrs = Object.values(byGroup); let li=-1; for(let i=0;i<12;i++){ let s=0; for(const a of arrs) s += (+a[i]||0); if (s!==0) li=i; } return li; })();
+    // Helper to blank future months
+    const cut = a => a.map((v,i)=> i>lastMonth ? null : v);
+
     datasets = groups.map((g,i)=>({
       label:g, data: byGroup[g], backgroundColor: COLORS[i%COLORS.length],
       stack:"S", categoryPercentage:0.9, barPercentage:0.9
@@ -417,178 +689,213 @@ async function drawMonthlyStacked(){
   stackedMonthlyCumPctInst = new Chart(document.getElementById("stackedMonthlyCumPercentChart"), { type:"bar", data:{ labels, datasets: datasetsPctCum }, options:getCommonOptions(true, 100, "Cumulative %") });
 }
 
-/* -------------------------- daily & cumulative (July + KPI) -------------------------- */
-function updateAchievementKPI(actual, target){
-  const card = document.getElementById('achvCard');
-  const vEl  = document.getElementById('achvValue');
-  const sEl  = document.getElementById('achvSub');
-  if (!card || !vEl || !sEl) return;
+/* -------------------------- yearly charts -------------------------- */
 
-  if (!target || target <= 0){
-    vEl.textContent = '--%';
-    sEl.textContent = 'Actual — / Target —';
-    card.classList.remove('good','ok','bad');
+// we already have: let yearlyInst, stackedYearlyInst, stackedYearlyPctInst;
+// DON’T redeclare them again.
+
+async function fetchYearlySales() {
+  const qs = new URLSearchParams({
+    metric:        filters.metric,
+    category:      filters.category,
+    region:        filters.region,
+    salesman:      filters.salesman,
+    sold_to_group: filters.sold_to_group,
+    sold_to:       filters.sold_to,
+    ship_to:       filters.ship_to,
+    product_group: filters.product_group,
+    pattern:       filters.pattern
+  }).toString();
+  return fetchJSON(`/api/yearly_sales?${qs}`);
+}
+
+async function fetchYearlyBreakdownWithGroup(groupBy) {
+  const qs = new URLSearchParams({
+    metric:        filters.metric,
+    category:      filters.category,
+    region:        filters.region,
+    salesman:      filters.salesman,
+    sold_to_group: filters.sold_to_group,
+    sold_to:       filters.sold_to,
+    ship_to:       filters.ship_to,
+    product_group: filters.product_group,
+    pattern:       filters.pattern,
+    group_by:      groupBy
+  }).toString();
+  return fetchJSON(`/api/yearly_breakdown?${qs}`);
+}
+
+
+// simple yearly bar (no cumulative)
+async function drawYearlyTotals() {
+  const rows = await fetchYearlySales();   // [{year:2024, value:123}, ...]
+  const labels = yearsLabels();
+  // map 4 years -> values
+  const data = labels.map(y => {
+    const r = rows.find(row => +row.year === y);
+    return r ? +r.value || 0 : 0;
+  });
+
+  if (yearlyInst) {
+    yearlyInst.destroy();
+  }
+
+  yearlyInst = new Chart(document.getElementById("yearlyChart"), {
+    type: "bar",
+    data: {
+      labels,
+      datasets: [
+        {
+          label: filters.metric === "amount" ? "Yearly Amount" : "Yearly Qty",
+          data,
+          backgroundColor: "#93c5fd",
+          categoryPercentage: 0.9,
+          barPercentage: 0.9
+        }
+      ]
+    },
+    options: getCommonOptions(false, undefined, "Yearly")
+  });
+}
+
+// build stacks for yearly
+function buildYearlyStacks(rows) {
+  const labels = yearsLabels();
+  const groups = [...new Set(rows.map(r => r.group_label))];
+  const byGroup = {};
+  groups.forEach(g => (byGroup[g] = Array(labels.length).fill(0)));
+
+  rows.forEach(r => {
+    const y = parseInt(r.year, 10);
+    const idx = labels.indexOf(y);
+    if (idx !== -1) {
+      byGroup[r.group_label][idx] += (+r.value || 0);
+    }
+  });
+
+  const datasets = groups.map((g, i) => ({
+    label: g,
+    data: byGroup[g],
+    backgroundColor: COLORS[i % COLORS.length],
+    stack: "S",
+    categoryPercentage: 0.9,
+    barPercentage: 0.9
+  }));
+
+  return { labels, groups, byGroup, datasets };
+}
+
+// % helper for N=number of years
+function toPercentStacksNYears(byKey, labelsLen) {
+  const keys = Object.keys(byKey);
+  const pct = {};
+  keys.forEach(k => (pct[k] = Array(labelsLen).fill(0)));
+  for (let i = 0; i < labelsLen; i++) {
+    const tot = keys.reduce((a, k) => a + (+byKey[k][i] || 0), 0) || 1;
+    keys.forEach(k => {
+      pct[k][i] = +(((byKey[k][i] || 0) / tot) * 100).toFixed(2);
+    });
+  }
+  return pct;
+}
+
+async function drawYearlyStacked() {
+  const effectiveGroup = filters.group_by;
+  const rows = await fetchYearlyBreakdownWithGroup(effectiveGroup);
+
+  // no data -> show single total per year
+  if (!rows || !rows.length) {
+    const totals = await fetchYearlySales();
+    const labels = yearsLabels();
+    const data = labels.map(y => {
+      const r = totals.find(t => +t.year === y);
+      return r ? +r.value || 0 : 0;
+    });
+
+    if (stackedYearlyInst) stackedYearlyInst.destroy();
+    if (stackedYearlyPctInst) stackedYearlyPctInst.destroy();
+
+    stackedYearlyInst = makeStacked(
+      "stackedYearlyChart",
+      labels,
+      [
+        {
+          label: "Total",
+          data,
+          backgroundColor: "#a78bfa",
+          stack: "S",
+          categoryPercentage: 0.9,
+          barPercentage: 0.9
+        }
+      ],
+      "Yearly"
+    );
+
+    stackedYearlyPctInst = makeStacked(
+      "stackedYearlyPercentChart",
+      labels,
+      [
+        {
+          label: "Total %",
+          data: labels.map(() => 100),
+          backgroundColor: "#a78bfa",
+          stack: "S",
+          categoryPercentage: 0.9,
+          barPercentage: 0.9
+        }
+      ],
+      "Yearly %",
+      100
+    );
     return;
   }
 
-  const pct = (actual / target) * 100;
-  vEl.textContent = pct.toFixed(1) + '%';
-  sEl.textContent = `${(actual||0).toLocaleString()} / ${target.toLocaleString()}`;
+  // build stacks from real rows
+  let { labels, groups, byGroup, datasets } = buildYearlyStacks(rows);
 
-  card.classList.remove('good','ok','bad');
-  if (pct >= 100) card.classList.add('good');
-  else if (pct >= 90) card.classList.add('ok');
-  else card.classList.add('bad');
-}
-
-async function drawDailyAndCumulative(){
-  filters.salesman=document.getElementById('salesman_name').value||"ALL";
-  filters.sold_to_group=document.getElementById('sold_to_group').value||"ALL";
-  filters.sold_to=document.getElementById('sold_to').value||"ALL";
-  filters.product_group=document.getElementById('product_group').value||"ALL";
-
-  // Use user's Group By. We’ll reduce to Top-10 only when grouping by Sold-to and there isn’t a single Sold-to filter.
-  const skuParams = { ...filters };
-  const isSoldToGrouping = skuParams.group_by === 'sold_to';
-  const isSingleSoldTo = skuParams.sold_to && skuParams.sold_to !== 'ALL';
-
-  const [rows,dailyTarget]=await Promise.all([
-    fetchJSON(`/api/sku_trend?${new URLSearchParams(skuParams).toString()}`),
-    fetchDailyTarget()
-  ]);
-
-  const labels=julyLabels(2025);
-  const idxMap=Object.fromEntries(labels.map((d,i)=>[d,i]));
-
-  const groupBy = filters.group_by;
-  let cats=[...new Set(rows.map(d=> labelForRow(d)))];
-  const dailyByCat={}; cats.forEach(k=> dailyByCat[k]=Array(labels.length).fill(0));
-
-  rows.forEach(r=>{
-    const i=idxMap[r.billing_date];
-    if(i==null) return;
-    const k = labelForRow(r);
-    const val=Number(r.daily_value ?? r.daily_qty ?? 0) || 0;
-    if (!dailyByCat[k]) dailyByCat[k] = Array(labels.length).fill(0);
-    dailyByCat[k][i] += val;
-  });
-
-  // If Top-10 is active and grouping by Sold-to, reduce to Top-10 + Other (smart fallback)
-  if (TOP_MODE === 'top10' && isSoldToGrouping && !isSingleSoldTo) {
+  // same top10 logic as monthly/daily
+  if (TOP_MODE === "top10" && effectiveGroup === "sold_to") {
     const topSet = await ensureTopSet();
-    const reduced = reduceToTopSmart(cats, dailyByCat, topSet);
-    cats = reduced.groups;
-
-    // replace dailyByCat with reduced.map
-    for (const k of Object.keys(dailyByCat)) delete dailyByCat[k];
-    Object.assign(dailyByCat, reduced.map);
+    const reduced = reduceToTopSmart(groups, byGroup, topSet);
+    groups = reduced.groups;
+    byGroup = reduced.map;
+    datasets = groups.map((g, i) => ({
+      label: g,
+      data: byGroup[g],
+      backgroundColor: COLORS[i % COLORS.length],
+      stack: "S",
+      categoryPercentage: 0.9,
+      barPercentage: 0.9
+    }));
   }
 
-  const dailyTotal = labels.map((_,i)=> cats.reduce((a,k)=> a + (dailyByCat[k][i]||0), 0));
-  const cumulativeTotalRaw = (()=>{ let run=0; return labels.map((_,i)=> (run += (dailyTotal[i]||0))); })();
+  const pct = toPercentStacksNYears(byGroup, labels.length);
+  const datasetsPct = groups.map((g, i) => ({
+    label: g,
+    data: pct[g],
+    backgroundColor: COLORS[i % COLORS.length],
+    stack: "S",
+    categoryPercentage: 0.9,
+    barPercentage: 0.9
+  }));
 
-  const hadAnyData = new Set(rows.map(r=>r.billing_date));
-  const dailyTotalForChart = labels.map((d,i)=> hadAnyData.has(d) ? dailyTotal[i] : null);
-  const cumulativeForChart = labels.map((d,i)=> hadAnyData.has(d) ? cumulativeTotalRaw[i] : null);
+  if (stackedYearlyInst) stackedYearlyInst.destroy();
+  if (stackedYearlyPctInst) stackedYearlyPctInst.destroy();
 
-  const pctByCat={}, cumByCat={}, cumpctByCat={};
-  cats.forEach(k=>{
-    pctByCat[k]=labels.map((d,i)=>{
-      const tot=dailyTotal[i]||0;
-      if(!hadAnyData.has(d) || tot===0) return null;
-      return +(((dailyByCat[k][i]||0)/tot)*100).toFixed(2);
-    });
-    let run=0;
-    cumByCat[k]=labels.map((d,i)=>{ run += (dailyByCat[k][i]||0); return hadAnyData.has(d) ? run : null; });
-  });
-  for(let i=0;i<labels.length;i++){
-    const d=labels[i];
-    const cumTot=cats.reduce((a,k)=> a + (cumByCat[k][i]||0), 0);
-    cats.forEach(k=>{
-      if(!cumpctByCat[k]) cumpctByCat[k]=Array(labels.length).fill(null);
-      cumpctByCat[k][i] = (!hadAnyData.has(d) || cumTot===0) ? null : +(((cumByCat[k][i]||0)/cumTot)*100).toFixed(2);
-    });
-  }
-
-  const ds = (map)=> cats.map((k,i)=>({label:k,data:map[k],backgroundColor:COLORS[i%COLORS.length],stack:"S", categoryPercentage:0.9, barPercentage:0.9}));
-
-  const showTarget = dailyTarget!=null;
-  const dailyTargetLine = showTarget? {label:"Daily Target",type:"line",data:labels.map(()=>dailyTarget),borderColor:"red",borderWidth:2,pointRadius:0,fill:false}:null;
-  const cumulativeTargetLine= showTarget? {label:"Cumulative Target",type:"line",data:labels.map((_,i)=>dailyTarget*(i+1)),borderColor:"red",borderWidth:2,pointRadius:0,fill:false}:null;
-
-  [dailyInst,cumulativeInst,stackedDailyInst,stackedDailyPctInst,stackedCumInst,stackedCumPctInst].forEach(c=>c&&c.destroy());
-
-  const metricLabel = filters.metric==="amount"?"Amount":"SKU";
-
-  dailyInst=new Chart(document.getElementById("dailyChart"),{
-    type:"bar",
-    data:{labels,datasets:[
-      {label:`Daily ${metricLabel}`,data:dailyTotalForChart,backgroundColor:"#a78bfa", categoryPercentage:0.9, barPercentage:0.9},
-      ...(dailyTargetLine?[dailyTargetLine]:[])
-    ]},
-    options:getCommonOptions(false)
+  stackedYearlyInst = new Chart(document.getElementById("stackedYearlyChart"), {
+    type: "bar",
+    data: { labels, datasets },
+    options: getCommonOptions(true, undefined, "Yearly")
   });
 
-  cumulativeInst=new Chart(document.getElementById("cumulativeChart"),{
-    type:"bar",
-    data:{labels,datasets:[
-      {label:`Cumulative ${metricLabel}`,data:cumulativeForChart,backgroundColor:"#0ea5a3", categoryPercentage:0.9, barPercentage:0.9},
-      ...(cumulativeTargetLine?[cumulativeTargetLine]:[])
-    ]},
-    options:getCommonOptions(false)
-  });
-
-  // Achievement % (overall) up to last non-null day
-  let lastIdx = -1;
-  for (let i = cumulativeForChart.length - 1; i >= 0; i--) {
-    if (cumulativeForChart[i] != null) { lastIdx = i; break; }
-  }
-  const cumActual = lastIdx >= 0 ? cumulativeTotalRaw[lastIdx] : 0;
-  const cumTargetVal = (dailyTarget != null && lastIdx >= 0) ? dailyTarget * (lastIdx + 1) : 0;
-  updateAchievementKPI(cumActual, cumTargetVal);
-
-  // Stacked daily / % / cumulative / cumulative %
-  stackedDailyInst   = new Chart(document.getElementById("stackedDailyChart"),         { type:"bar", data:{ labels, datasets: ds(dailyByCat) },     options:getCommonOptions(true) });
-  stackedDailyPctInst= new Chart(document.getElementById("stackedDailyPercentChart"), { type:"bar", data:{ labels, datasets: ds(pctByCat) },       options:getCommonOptions(true, 100, "Daily %") });
-  stackedCumInst     = new Chart(document.getElementById("stackedCumulativeChart"),   { type:"bar", data:{ labels, datasets: ds(cumByCat) },       options:getCommonOptions(true) });
-  stackedCumPctInst  = new Chart(document.getElementById("stackedCumulativePercentChart"), { type:"bar", data:{ labels, datasets: ds(cumpctByCat) }, options:getCommonOptions(true, 100, "Cumulative %") });
-}
-
-/* -------------------------- KPI by Salesman -------------------------- */
-function salesmanNamesByRegion(region="ALL"){
-  const all = Object.values(REGION_SALESMEN).flat();
-  return region && region !== "ALL" ? (REGION_SALESMEN[region] || []) : all;
-}
-function classForPct(p){ return p>=100 ? 'good' : (p>=90 ? 'ok' : 'bad'); }
-
-async function renderSalesmanKPIs(currentFilters){
-  const grid = document.getElementById('salesmanKpiGrid');
-  if(!grid) return;
-  grid.innerHTML = '<div style="color:#666;font-size:12px;">Loading…</div>';
-
-  const qs = new URLSearchParams({
-    metric: currentFilters.metric,
-    region: currentFilters.region,
-    sold_to_group: currentFilters.sold_to_group,
-    sold_to: currentFilters.sold_to,
-    product_group: currentFilters.product_group,
-    category: currentFilters.category,
-    salesman: document.getElementById('salesman_name').value || 'ALL'
-  }).toString();
-
-  const kpis = await fetchJSON(`/api/salesman_kpis?${qs}`);
-
-  grid.innerHTML = '';
-  (kpis || []).forEach(k=>{
-    const card = document.createElement('div');
-    card.className = `kpi-card tight ${classForPct(k.pct)}`;
-    card.innerHTML = `
-      <div class="kpi-name">${k.name}</div>
-      <div class="kpi-value" style="font-size:32px;">${(+k.pct||0).toFixed(1)}%</div>
-      <div class="kpi-mini">${(+k.actual||0).toLocaleString()} / ${(+k.target||0).toLocaleString()}</div>
-    `;
-    grid.appendChild(card);
-  });
+  stackedYearlyPctInst = new Chart(
+    document.getElementById("stackedYearlyPercentChart"),
+    {
+      type: "bar",
+      data: { labels, datasets: datasetsPct },
+      options: getCommonOptions(true, 100, "Yearly %")
+    }
+  );
 }
 
 /* -------------------------- init & orchestrator -------------------------- */
@@ -607,24 +914,297 @@ async function initControls(){
   const list = document.getElementById('sold_to_list');
   list.innerHTML = '';
   soldTo.forEach(n => { const o=document.createElement('option'); o.value=n; list.appendChild(o); });
+  await refreshShipTo(); // show ALL ship-to names initially
+
+}
+/* ---------------------- FAST KPI TABLE (robust) ---------------------- */
+
+/* helpers */
+const __fmtInt = n => (Math.round(+n || 0)).toLocaleString();
+const __pctClass = v => v>=80 ? 'kpi-good' : (v>=60 ? 'kpi-ok' : 'kpi-bad');
+
+function kpiQS() {
+  const base = {
+    metric:        filters.metric,
+    category:      filters.category,
+    region:        filters.region,
+    sold_to_group: filters.sold_to_group,
+    sold_to:       filters.sold_to,
+    ship_to:       filters.ship_to,
+    product_group: filters.product_group,
+    pattern:       filters.pattern
+ ,
+    salesman:      filters.salesman
+  };
+  return new URLSearchParams(base).toString();
 }
 
-async function drawAll(){
-  await drawDailyAndCumulative();
+const __kpiCache = new Map();
+async function fetchKpiSnapshot() {
+  const qs = kpiQS();
+  if (__kpiCache.has(qs)) return __kpiCache.get(qs);
+  const data = await fetchJSON(`/api/kpi_snapshot?${qs}`);
+  __kpiCache.set(qs, data);
+  return data;
+}
+
+/* Ensure/return the container we render into */
+function ensureKpiContainer() {
+  let wrap = document.getElementById('kpiRegionGrid');
+  if (!wrap) {
+    // Try a parent holder first
+    const holder =
+      document.getElementById('kpiRegionGridWrap') ||
+      document.querySelector('#kpiRegionGridWrap') ||
+      document.body;
+
+    wrap = document.createElement('div');
+    wrap.id = 'kpiRegionGrid';
+    holder.appendChild(wrap);
+  }
+  return wrap;
+}
+
+function rowHtml(name, pack, isHeader=false) {
+  const cell = (obj) =>
+    `<td class="num">
+       <div class="pct ${__pctClass(+obj.p||0)}">${__fmtInt(obj.p)}%</div>
+       <div class="mini">${__fmtInt(obj.a)} / ${__fmtInt(obj.t)}</div>
+     </td>`;
+  return `
+    <tr class="${isHeader?'is-overall':''}">
+      <td class="name">${name ?? ''}</td>
+      ${cell(pack.jul)}${cell(pack.q1)}${cell(pack.q2)}${cell(pack.q3)}
+    </tr>`;
+}
+
+function smallTableHtml(caption, rowsHtml) {
+  return `
+    <div class="region-table-box">
+      <div class="region-caption">${caption ?? ''}</div>
+      <table class="kpi-table">
+        <thead>
+          <tr>
+            <th class="name-col">Name</th>
+            <th>Jul</th>
+            <th>Q1</th>
+            <th>Q2</th>
+            <th>Q3-to-date</th>
+          </tr>
+        </thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+    </div>`;
+}
+
+async function renderFastKpiTable() {
+  const wrap = ensureKpiContainer();
+  wrap.innerHTML = '<div class="muted">Loading KPI…</div>';
+
+  try {
+    const snap = await fetchKpiSnapshot();
+    if (!snap || snap.error) {
+      console.warn('kpi_snapshot returned no data or error:', snap?.error);
+      wrap.innerHTML = '<div class="muted">No KPI data.</div>';
+      return;
+    }
+
+    // Overall
+  let html = smallTableHtml('Overall', rowHtml('All', snap.overall, true));
+
+  // Regions (respect filters.region)
+  const regions = Array.isArray(snap.regions) ? snap.regions : [];
+  const filteredRegions = (filters.region && filters.region !== 'ALL') ? regions.filter(r => String(r.region||'').toUpperCase() === String(filters.region||'').toUpperCase()) : regions;
+  html += filteredRegions.map(r => {
+      const caption = r.region ?? 'Region';
+      let rows = rowHtml(r.region ?? 'Region', r.kpi || { jul:{a:0,t:0,p:0}, q1:{a:0,t:0,p:0}, q2:{a:0,t:0,p:0}, q3:{a:0,t:0,p:0} }, true);
+      let salesmen = Array.isArray(r.salesmen) ? r.salesmen : [];
+      if (filters.salesman && filters.salesman !== 'ALL') {
+        salesmen = salesmen.filter(s => (s.name||'') === filters.salesman);
+      }
+      salesmen.forEach(s => { rows += rowHtml(s.name ?? 'UNK', s); });
+      return smallTableHtml(caption, rows);
+    }).join('');
+
+    wrap.innerHTML = html;
+  } catch (e) {
+    console.error('renderFastKpiTable failed:', e);
+    wrap.innerHTML = '<div class="muted">Failed to load KPIs.</div>';
+    showError(`KPI table error: ${e.message || e}`);
+  }
+}
+/* ===================== PROFIT (COMBINED) ===================== */
+
+let profitComboInst = null;
+
+const PROFIT_MONTH_LABELS = [
+  "Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"
+];
+
+function renderProfitCombined(rows) {
+  const el = document.getElementById("profitComboChart");
+  if (!el) return;
+
+  if (profitComboInst) {
+    profitComboInst.destroy();
+    profitComboInst = null;
+  }
+
+  // Ensure we always have 12 months
+  const byMonth = Array.from({ length: 12 }, (_, i) =>
+    rows.find(r => +r.month === i + 1) || { month: i + 1, gross: 0, sd: 0, cogs: 0, op_cost: 0 }
+  );
+
+  const gross = byMonth.map(r => +r.gross || 0);
+  const sd    = byMonth.map(r => +r.sd || 0);
+  const cogs  = byMonth.map(r => +r.cogs || 0);
+  const op    = byMonth.map(r => +r.op_cost || 0);
+
+  const totalCost = sd.map((v, i) => v + cogs[i] + op[i]);
+  const profitPct = gross.map((g, i) => (g > 0 ? ((g - totalCost[i]) / g) * 100 : 0));
+
+  profitComboInst = new Chart(el, {
+    type: "bar",
+    data: {
+      labels: PROFIT_MONTH_LABELS,
+      datasets: [
+        // Bar group 1: Gross
+        {
+          type: "bar",
+          label: "Gross",
+          data: gross,
+          yAxisID: "y",
+          stack: "G",
+          backgroundColor: "#93c5fd",
+          borderColor: "#60a5fa",
+          borderWidth: 1,
+          categoryPercentage: 0.9,
+          barPercentage: 0.9
+        },
+        // Bar group 2: stacked Costs (beside Gross)
+       
+        {
+          type: "bar",
+          label: "COGS",
+          data: cogs,
+          yAxisID: "y",
+          stack: "C",
+          backgroundColor: "#f87171",
+          categoryPercentage: 0.9,
+          barPercentage: 0.9
+        },
+        {
+          type: "bar",
+          label: "Op Cost",
+          data: op,
+          yAxisID: "y",
+          stack: "C",
+          backgroundColor: "#fbbf24",
+          categoryPercentage: 0.9,
+          barPercentage: 0.9
+        },
+        {
+          type: "bar",
+          label: "Sales Deduction",
+          data: sd,
+          yAxisID: "y",
+          stack: "C",
+          backgroundColor: "#d55fc3ff",
+          categoryPercentage: 0.9,
+          barPercentage: 0.9
+        },
+        // Line: Profit %
+        {
+          type: "line",
+          label: "Profit %",
+          data: profitPct,
+          yAxisID: "y1",   // right axis
+          tension: 0.25,
+          borderWidth: 2,
+          pointRadius: 2,
+          fill: false,
+          borderColor: "#10b981",
+          pointBackgroundColor: "#10b981"
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      scales: {
+        x: { stacked: false },
+        y: {
+          beginAtZero: true,
+          title: { display: true, text: "Amount" },
+          ticks: { callback: v => Number(v).toLocaleString() }
+        },
+        y1: {
+          position: "right",
+          beginAtZero: true,
+          suggestedMax: 100,
+          title: { display: true, text: "Profit %" },
+          grid: { drawOnChartArea: false },
+          ticks: { callback: v => `${Math.round(v)}%` }
+        }
+      },
+      plugins: {
+        datalabels: false,
+        legend: { display: true },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => {
+              if (ctx.dataset.yAxisID === "y1") {
+                return `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)}%`;
+              }
+              return `${ctx.dataset.label}: ${Number(ctx.parsed.y || 0).toLocaleString()}`;
+            }
+          }
+        }
+      }
+    }
+  });
+}
+
+async function loadProfit() {
+  const qs = new URLSearchParams({
+    metric:        filters.metric,
+    category:      filters.category,
+    region:        filters.region,
+    salesman:      filters.salesman,
+    sold_to_group: filters.sold_to_group,
+    sold_to:       filters.sold_to,
+    ship_to:       filters.ship_to,
+    product_group: filters.product_group,
+    pattern:       filters.pattern
+  }).toString();
+
+  const rows = await fetchJSON(`/api/profit_monthly?${qs}`);
+  renderProfitCombined(Array.isArray(rows) ? rows : []);
+}
+
+/* =================== END PROFIT (COMBINED) =================== */
+
+
+
+
+async function refreshAllWithKpi(){
+  await drawDailyTotals(),          // now uses October data internally
+  await drawDailyStacked(),
   await drawMonthlyTotals();
   await drawMonthlyStacked();
-  await renderSalesmanKPIs({
-    metric: filters.metric,
-    region: filters.region,
-    sold_to_group: filters.sold_to_group,
-    sold_to: filters.sold_to,
-    product_group: filters.product_group,
-    category: filters.category
-  });
+  await loadProfit();
+  await drawYearlyTotals();
+  await drawYearlyStacked();
+  await renderFastKpiTable();
+  await loadProfit();
 }
 
 (async function start(){
   await initControls();
   [...document.querySelectorAll("#catBtns .btn")].forEach(b=>b.classList.toggle("active",b.dataset.val===filters.category));
-  await drawAll();
+  await refreshAllWithKpi();
+  
+  await refreshPatterns();                 // make pattern list available on load
+  document.getElementById('ship_to').disabled = false; // locked until Sold-to is chosen
 })();

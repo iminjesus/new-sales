@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>July Sales Dashboard</title>
+  <title>Sales Dashboard</title>
 
   <!-- CDN for Chart.js -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -11,10 +11,9 @@
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-  <h1>July Sales Dashboard</h1>
+  <h2>Sales Dashboard</h2>
 
   <!-- Category buttons -->
-  <label>Category:</label>
   <div id="catBtns" class="controls" style="gap:6px;">
     <button class="btn active" data-val="ALL">All</button>
     <button class="btn" data-val="PCLT">PCLT</button>
@@ -41,7 +40,7 @@
       <option value="product_group">Product Group</option>
     </select>
 
-    <label style="margin-left:10px;">Region:</label>
+    
     <div id="regionBtns" class="controls" style="gap:6px;">
       <button class="btn" data-val="ALL">ALL</button>
       <button class="btn" data-val="NSW">NSW</button>
@@ -55,13 +54,18 @@
 
     <label>Sold-to Group:</label>
     <select id="sold_to_group"><option value="ALL">ALL</option></select>
-    
 
     <label for="sold_to">Sold-to:</label>
     <input type="text" id="sold_to" placeholder="Search Sold-to..." list="sold_to_list" />
     <datalist id="sold_to_list"></datalist>
 
-    <label>View:</label>
+    <!-- NEW: Ship-to (enabled only after Sold-to is chosen) -->
+    <label style="margin-left:8px;">Ship-to:</label>
+    <input list="ship_to_list" id="ship_to" placeholder="Search Ship-to..." />
+    <datalist id="ship_to_list"></datalist>
+
+
+   
     <div id="topModeBtns" class="controls" style="gap:6px;">
       <button class="btn active" data-mode="all">All</button>
       <button class="btn" data-mode="top10">Top 10 (2025)</button>
@@ -70,58 +74,58 @@
     <label>Product Group:</label>
     <select id="product_group"><option value="ALL">ALL</option></select>
 
-    <button id="applyBtn" class="btn">Apply</button>
+    <!-- NEW: Pattern (list filtered by Product Group) -->
+    <label style="margin-left:8px;">Pattern:</label>
+    <input list="pattern_list" id="pattern" placeholder="Search Pattern" />
+    <datalist id="pattern_list"></datalist>
+
+    <div id="kpiRegionGridWrap">
+      <div id="kpiRegionGrid"></div>
+    </div>
+  </div>
+</div>
+  <!-- ROW 1: Daily -->
+  <div class="chart-row" style="margin-top:4px;">
+    <div class="box"><h3 id="dailyTitle">Daily Sales</h3><canvas id="dailyChart"></canvas></div>
+    <div class="box"><h3>Stacked Daily</h3><canvas id="stackedDailyChart"></canvas></div>
+    <div class="box"><h3>Stacked Daily %</h3><canvas id="stackedDailyPercentChart"></canvas></div>
   </div>
 
-  <!-- KPI: Achievement % (overall) -->
-  <div class="kpi-row">
-    <div class="kpi-card" id="achvCard">
-      <div>
-        <div class="kpi-title">Achievement %</div>
-        <div class="kpi-sub" id="achvSub">Actual — / Target —</div>
+  <!-- ROW 2: Daily cumulative -->
+  <div class="chart-row" style="margin-top:4px;">
+    <div class="box"><h3 id="cumTitle">Cumulative Sales (Daily)</h3><canvas id="dailyCumChart"></canvas></div>
+    <div class="box"><h3>Stacked Cumulative</h3><canvas id="stackedDailyCumChart"></canvas></div>
+    <div class="box"><h3>Stacked Cumulative %</h3><canvas id="stackedDailyCumPercentChart"></canvas></div>
+  </div>
+
+
+
+  <!-- ROW 3: base 2 charts Monthly -->
+  <div class="chart-row" style="margin-top:4px;">
+    <div class="box"><h3>Monthly Sales</h3><canvas id="monthlyChart"></canvas></div>
+    <div class="box"><h3>Stacked Monthly</h3><canvas id="stackedMonthlyChart"></canvas></div>
+    <div class="box"><h3>Stacked Monthly %</h3><canvas id="stackedMonthlyPercentChart"></canvas></div>
+    <div class="box">
+        <h3>Profit (Monthly)</h3>
+        <div class="chart-fixed">
+          <canvas id="profitComboChart"></canvas>
+        </div>
       </div>
-      <div class="kpi-right kpi-value" id="achvValue">--%</div>
     </div>
   </div>
 
-  <!-- KPI: Achievement by Salesman -->
-  <h2 style="margin:8px 0 6px;">Achievement by Salesman</h2>
-  <div id="salesmanKpiGrid" class="kpi-grid"></div>
-
-  <!-- ROW 1: base 2 charts -->
-  <div class="chart-row">
-    <div class="box"><h2 id="dailyTitle">Daily Sales</h2><canvas id="dailyChart"></canvas></div>
-    <div class="box"><h2 id="cumTitle">Cumulative Sales</h2><canvas id="cumulativeChart"></canvas></div>
+  <!-- ROW 4: stacked 2 charts Monthly -->
+  <div class="chart-row" style="margin-top:4px;">
+    <div class="box"><h3>Cumulative by Month</h3><canvas id="monthlyCumChart"></canvas></div>
+    <div class="box"><h3>Stacked Cumulative by Month</h3><canvas id="stackedMonthlyCumChart"></canvas></div>
+    <div class="box"><h3>Stacked Cumulative by Month %</h3><canvas id="stackedMonthlyCumPercentChart"></canvas></div>
   </div>
 
-  <!-- ROW 2: stacked 2 charts -->
-  <div class="chart-row" style="margin-top:16px;">
-    <div class="box"><h2>Stacked Daily</h2><canvas id="stackedDailyChart"></canvas></div>
-    <div class="box"><h2>Stacked Cumulative</h2><canvas id="stackedCumulativeChart"></canvas></div>
-  </div>
-
-  <!-- ROW 3: stacked % 2 charts -->
-  <div class="chart-row" style="margin-top:16px;">
-    <div class="box"><h2>Stacked Daily %</h2><canvas id="stackedDailyPercentChart"></canvas></div>
-    <div class="box"><h2>Stacked Cumulative %</h2><canvas id="stackedCumulativePercentChart"></canvas></div>
-  </div>
-
-  <!-- ROW 4: base 2 charts Monthly -->
-  <div class="chart-row" style="margin-top:16px;">
-    <div class="box"><h2>Monthly Sales</h2><canvas id="monthlyChart"></canvas></div>
-    <div class="box"><h2>Cumulative by Month</h2><canvas id="monthlyCumChart"></canvas></div>
-  </div>
-
-  <!-- ROW 5: stacked 2 charts Monthly -->
-  <div class="chart-row" style="margin-top:16px;">
-    <div class="box"><h2>Stacked Monthly</h2><canvas id="stackedMonthlyChart"></canvas></div>
-    <div class="box"><h2>Stacked Cumulative by Month</h2><canvas id="stackedMonthlyCumChart"></canvas></div>
-  </div>
-
-  <!-- ROW 6: stacked % 2 charts monthly -->
-  <div class="chart-row" style="margin-top:16px;">
-    <div class="box"><h2>Stacked Monthly %</h2><canvas id="stackedMonthlyPercentChart"></canvas></div>
-    <div class="box"><h2>Stacked Cumulative by Month %</h2><canvas id="stackedMonthlyCumPercentChart"></canvas></div>
+  <!-- ROW 5: Yearly -->
+  <div class="chart-row" style="margin-top:4px;">
+    <div class="box"><h3 id="yearlyTitle">Yearly Sales</h3><canvas id="yearlyChart"></canvas></div>
+    <div class="box"><h3>Stacked Yearly</h3><canvas id="stackedYearlyChart"></canvas></div>
+    <div class="box"><h3>Stacked Yearly %</h3><canvas id="stackedYearlyPercentChart"></canvas></div>
   </div>
 
   <!-- tiny error bar to surface API issues -->
