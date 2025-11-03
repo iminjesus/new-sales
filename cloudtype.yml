@@ -1,0 +1,14 @@
+version: 1
+services:
+  - name: salesdata
+    type: python
+    # the command your app runs; keep yours if you already set it
+    run: python app.py
+    env:
+      DB_HOST: 127.0.0.1
+      DB_PORT: 3306
+      DB_USER: root
+      DB_PASS: 
+      DB_NAME: my_new_database
+    ports:
+      - 5000
