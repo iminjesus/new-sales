@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify, send_from_directory
 import mysql.connector
 from time import time  # cache timestamps
 import os
+from flask_cors import CORS
 # --------------------------- tiny cache (unchanged) ---------------------------
 _KPI_CACHE = {}
 def cache_get(namespace: str, key: str, ttl: int = 60):
@@ -187,6 +188,7 @@ def category_target_filters(alias: str, category: str):
     return joins, wh
 
 app = Flask(__name__, static_folder="static")
+CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 def get_connection():
     cfg = {
