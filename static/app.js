@@ -38,12 +38,14 @@ const filters={
   ship_to:"ALL",          
   product_group:"ALL",
   pattern:"ALL",          
-  category:"ALL"
+  category:"ALL",
+  category_target:"ALL"
 };
 
-let dailyInst,dailyCumInst,monthlyInst,monthlyCumInst,yearlyInst,
+let dailyInst,dailyCumInst,monthlyInst,monthlyCumInst,yearlyInst,monthlyTargetInst,
     stackedDailyInst,stackedDailyCumInst, stackedDailyPctInst, stackedDailyCumPctInst, stackedYearlyInst, stackedYearlyPctInst,
-    stackedMonthlyInst, stackedMonthlyCumInst, stackedMonthlyPctInst, stackedMonthlyCumPctInst;
+    stackedMonthlyInst, stackedMonthlyCumInst, stackedMonthlyPctInst, stackedMonthlyCumPctInst,
+    stackedMonthlyTargetInst, stackedMonthlyTargetCumInst, stackedMonthlyTargetPctInst, stackedMonthlyTargetCumPctInst;
 
 const $=s=>document.querySelector(s);
 function showError(msg){
@@ -134,7 +136,7 @@ async function fetchTopSet2025(){
     group_by:      'sold_to'
   }).toString();
 
-  const monthlyRows = await fetchJSON(`/api/monthly_reakdown?${backupQs}`);
+  const monthlyRows = await fetchJSON(`/api/monthly_breakdown?${backupQs}`);
   const sumBySoldTo = new Map(); // normalized name -> total
   monthlyRows.forEach(r => {
     const k = norm(r.group_label || 'UNKNOWN');
@@ -223,31 +225,54 @@ function xAxisDdMm(stacked=false){
 // Plugin to display actual data values centered inside bars
 const showDataValuesPlugin = {
   id: "showDataValues",
-  afterDatasetsDraw(chart, _args, opts) {
-    const { ctx } = chart;
-    ctx.save();
-    const color = opts?.color || "#111";
-    const font  = opts?.font  || "10px Arial";
+  afterDatasetsDraw(chart, _args, pluginOpts = {}) {
+    const ctx = chart.ctx;
+    const area = chart.chartArea;
 
+    // global defaults; can be overridden per chart via options.plugins.showDataValues
+    const color     = pluginOpts.color ?? "#111";
+    const font      = pluginOpts.font  ?? "10px Arial";
+    const offset    = pluginOpts.offset ?? 6;                 // for line points
+    const include   = pluginOpts.include ?? ["bar", "line"];  // which types to draw
+    const formatter = pluginOpts.formatter ?? (v =>
+      (typeof v === "number" ? v.toLocaleString() : String(v)));
+
+    ctx.save();
     chart.data.datasets.forEach((ds, i) => {
       const meta = chart.getDatasetMeta(i);
       if (!meta || meta.hidden) return;
-      if (meta.type !== "bar") return;
 
-      meta.data.forEach((elem, idx) => {
+      const type = meta.type || ds.type || chart.config.type;
+      if (!include.includes(type)) return;
+
+      (meta.data || []).forEach((elem, idx) => {
         if (!elem) return;
+
         const raw = ds.data[idx];
         const val = Number(raw);
-        if (raw == null || !Number.isFinite(val) || val === 0) return; // ← skip 0s
+        if (raw == null || !Number.isFinite(val) || val === 0) return; // skip 0s
 
-        const props = elem.getProps(["x", "y", "base"], true);
-        const centerY = props.y + (props.base - props.y) / 2;
-        ctx.fillStyle = color;
+        let x, y;
+        if (type === "bar") {
+          // center the text vertically in the bar
+          const { x: bx, y: by, base } = elem.getProps(["x", "y", "base"], true);
+          x = bx;
+          y = by + (base - by) / 2;
+        } else { // line
+          // draw slightly above the point
+          const p = elem.getProps(["x", "y"], true);
+          x = p.x;
+          y = p.y - offset;
+        }
+
+        // keep labels inside the chart area
+        y = Math.max(area.top + 8, Math.min(y, area.bottom - 8));
+
+        ctx.fillStyle = (ds.datalabels && ds.datalabels.color) || color;
         ctx.font = font;
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
-        const text = typeof val === "number" ? val.toLocaleString() : String(val);
-        ctx.fillText(text, props.x, centerY);
+        ctx.fillText(formatter(val), x, y);
       });
     });
     ctx.restore();
@@ -430,7 +455,7 @@ async function fetchDailyBreakdownWithGroup(groupBy){
 
 
 
-// totals (bar + cumulative), same shape as drawMonthlyTotals (no target for daily)
+// totals (bar + cumulative), same shape as drawDailyTotals (no target for daily)
 async function drawDailyTotals(){
   const [salesRows] = await Promise.all([ fetchDailySales() ]);
   const labels   = daysLabels();
@@ -592,6 +617,11 @@ async function drawMonthlyTotals(){
   const labels=monthsLabels();
   const sales = salesRows.map(r=>+r.value||0);
   const targets= targetRows.map(r=>+r.value||0);
+  
+  // % achievement per month
+  const achievement = labels.map((_, i) =>
+    targets[i] > 0 ? (sales[i] / targets[i]) * 100 : null
+  );
   const salesCum=toCumulative(sales), targetCum=toCumulative(targets);
 
   [monthlyInst,monthlyCumInst].forEach(c=>c&&c.destroy());
@@ -601,8 +631,9 @@ async function drawMonthlyTotals(){
   monthlyInst=new Chart(document.getElementById("monthlyChart"),{
     type:"bar",
     data:{labels,datasets:[
-      {label:filters.metric==="amount"?"Monthly Amount":"Monthly Qty",data:sales,backgroundColor:"#93c5fd", categoryPercentage:0.9, barPercentage:0.9},
-      {label:"Monthly Target",type:"line",data:targets,borderWidth:2,pointRadius:0,borderDash:[6,4],borderColor:"#ef4444"}
+      {label:filters.metric==="amount"?"Sales Amount":"SalesQty",data:sales, backgroundColor:"#93c5fd", categoryPercentage:0.9, barPercentage:0.9, order: 1, z:0 },
+      {label:"Target",type:"bar",data:targets, borderWidth:2, borderColor:"#6644efff"  },
+      {label:"Achievement(%)",type:"line", data: achievement,  yAxisID: "y1", borderWidth:2,pointRadius:0,borderColor:"#ef4444"}
     ]},
     options:getCommonOptions(false)
   });
@@ -610,7 +641,7 @@ async function drawMonthlyTotals(){
     type:"bar",
     data:{labels,datasets:[
       {label:filters.metric==="amount"?"Cumulative Amount":"Cumulative Qty",data:salesCum,backgroundColor:"#34d399", categoryPercentage:0.9, barPercentage:0.9},
-      {label:"Cumulative Target",type:"line",data:targetCum,borderWidth:2,pointRadius:0,borderDash:[6,4],borderColor:"#ef4444"}
+      {label:"Cumulative Target",type:"line",data:targetCum,borderWidth:2,pointRadius:0,borderColor:"#ef4444"}
     ]},
     options:getCommonOptions(false)
   });
@@ -688,6 +719,8 @@ async function drawMonthlyStacked(){
   stackedMonthlyPctInst    = new Chart(document.getElementById("stackedMonthlyPercentChart"), { type:"bar", data:{ labels, datasets: datasetsPct }, options:getCommonOptions(true, 100, "Monthly %") });
   stackedMonthlyCumPctInst = new Chart(document.getElementById("stackedMonthlyCumPercentChart"), { type:"bar", data:{ labels, datasets: datasetsPctCum }, options:getCommonOptions(true, 100, "Cumulative %") });
 }
+
+
 
 /* -------------------------- yearly charts -------------------------- */
 
@@ -1033,6 +1066,7 @@ async function renderFastKpiTable() {
     showError(`KPI table error: ${e.message || e}`);
   }
 }
+
 /* ===================== PROFIT (COMBINED) ===================== */
 
 let profitComboInst = null;
@@ -1198,6 +1232,7 @@ async function refreshAllWithKpi(){
   await drawYearlyStacked();
   await renderFastKpiTable();
   await loadProfit();
+  
 }
 
 (async function start(){

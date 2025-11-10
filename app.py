@@ -40,7 +40,7 @@ def build_customer_filters(alias_fact: str, f, *, use_sold_to_name: bool=False):
         JOIN customer cus ON cus.Ship_to = <fact>.Ship_To
     If use_sold_to_name=True, 'sold_to' will match customer.Sold_to_Name instead of id.
     """
-    joins = [f"JOIN customer cus ON cus.Ship_to = {alias_fact}.Ship_To"]
+    joins = [f"left JOIN customer cus ON cus.Ship_to = {alias_fact}.Ship_To"]
     wh, p = [], []
 
     if f["region"] != "ALL":
@@ -93,7 +93,7 @@ def build_product_filters(alias_fact: str, f):
         p.append(f["pattern"])
     return exists_pg + exists_pt, p
 
-def category_filters_monthly(alias: str, category: str):
+def category_filters(alias: str, category: str):
     """
     Return (joins, wheres) for monthly-schema facts (sales2025, profit).
     - alias: table alias for the fact (e.g., "s" for sales2025, "p" for profit)
@@ -106,14 +106,20 @@ def category_filters_monthly(alias: str, category: str):
     if cat == "ALL":
         return joins, wh
 
-    if cat == "PCLT":
+    elif cat == "PCLT":
         # material codes starting with 1 or 2
-        wh.append(f"({alias}.Material LIKE '1%' OR {alias}.Material LIKE '2%')")
+        wh.append(f"{alias}.Line = 'PCLT'")
 
     elif cat == "TBR":
         # example logic: material codes starting with 3 (adjust to your real rule)
-        wh.append(f"{alias}.Material LIKE '3%'")
+        wh.append(f"{alias}.Line = 'TBR'")
 
+     # NEW: 18+ Inch means PCLT & inch > 18
+    elif cat == "18PLUS":
+        wh.append(f"{alias}.Line = 'PCLT'")
+        # inch is often stored as text; cast to numeric for safety
+        wh.append(f"CAST({alias}.inch AS DECIMAL(10,2)) >= 18.0")
+        
     elif cat == "ISEG":
         # ISEG mapping by Material
         # Ensure an index on iseg(Material)
@@ -135,6 +141,51 @@ def category_filters_monthly(alias: str, category: str):
 
     return joins, wh
 
+def category_target_filters(alias: str, category: str):
+    """
+    Return (joins, wheres) for monthly-schema facts (sales2025, profit).
+    - alias: table alias for the fact (e.g., "s" for sales2025, "p" for profit)
+    - All predicates are index-friendly (equality / LIKE prefix).
+    - Add optional JOINs only when that category needs them.
+    """
+    joins, wh = [], []
+    cat = (category or "ALL").upper()
+
+    if cat == "ALL":
+        wh.append(f"{alias}.Special =''")
+
+    elif cat == "PCLT":
+        # material codes starting with 1 or 2
+        wh.append(f"{alias}.Line = 'PCLT'")
+        wh.append(f"{alias}.Special =''")
+
+    elif cat == "TBR":
+        # example logic: material codes starting with 3 (adjust to your real rule)
+        wh.append(f"{alias}.Line = 'TBR'")
+        wh.append(f"{alias}.Special =''")
+
+     # NEW: 18+ Inch means PCLT & inch > 18
+    elif cat == "18PLUS":
+        wh.append(f"{alias}.Special = 'HighInch'")
+       
+        
+    elif cat == "ISEG":
+        wh.append(f"{alias}.Special = 'iSeg'")
+
+    elif cat == "SUV":
+        
+        wh.append(f"{alias}.Special = 'SUV'")
+
+    elif cat == "LOWPROFILE":
+       wh.append(f"{alias}.Special = 'Low Profile / Strategic TBR'")
+
+    elif cat == "HM":
+        # HM by Sold-To (use your customer join for Ship_To ⇒ Sold_To; keep simple)
+        # If your HM rule is customer-list based, prefer EXISTS against a keyed table.
+        joins.append(f"JOIN HM hm ON cast(trim(hm.Sold_To) as unsigned) = {alias}.Sold_To")
+
+    return joins, wh
+
 app = Flask(__name__, static_folder="static")
 
 def get_connection():
@@ -147,35 +198,12 @@ def get_connection():
         "autocommit": True,
     }
     try:
-        conn = mysql.connector.connect(**cfg)
-        # quick sanity check
-        conn.ping(reconnect=True, attempts=1, delay=0)
-        return conn
+        return mysql.connector.connect(**cfg)
     except mysql.connector.Error as e:
-        app.logger.error("DB connect failed (host=%s, db=%s): %s",
-                         cfg.get("host"), cfg.get("database"), e)
+        # temporary: don't kill the app, just log
+        print("DB connection failed:", e)
         return None
 
-# ---------------------------- category rules ---------------------------------
-
-
-REGION_SALESMEN_PY = {
-    "NSW": ["Hamid Jallis","LUTTRELL STEVE","Hulley Gary","Lee Don"],
-    "QLD": ["Lopez Randall","Spires Steven","Sampson Kieren","Marsh Aaron"],
-    "VIC": ["Bellotto Nicola","Bilston Kelley","Gultjaeff Jason","Hobkirk Calvin"],
-    "WA" : ["Fruci Davide","Gilbert Michael"],
-}
-
-def allowed_salesmen_for_region(region: str, salesman_param: str = "ALL"):
-    if region and region in REGION_SALESMEN_PY:
-        base = REGION_SALESMEN_PY[region][:]
-    else:
-        base = sorted({n for names in REGION_SALESMEN_PY.values() for n in names})
-    if salesman_param and salesman_param != "ALL":
-        sel = salesman_param.strip().upper()
-        baseU = {n.strip().upper() for n in base}
-        return [salesman_param] if sel in baseU else []
-    return base
 
 # ------------------------------------------------------------------------------
 @app.get("/")
@@ -206,14 +234,7 @@ def kpi_snapshot():
     ship_to       = request.args.get("ship_to", "ALL") or "ALL"
     pattern       = request.args.get("pattern", "ALL") or "ALL"
 
-    # category rules
-    cat_rule_m = CATEGORY_RULES_MONTHLY.get(category, CATEGORY_RULES_MONTHLY["ALL"])
-    cat_join_m  = cat_rule_m.get("join", "")
-    cat_where_m = cat_rule_m.get("where", [])[:]
-
-    cat_rule_d = CATEGORY_RULES.get(category, CATEGORY_RULES["ALL"])
-    cat_join_d  = cat_rule_d.get("sales_join", "")
-    cat_where_d = cat_rule_d.get("sales_where", [])[:]
+    
 
     # -------- normalized mapping joins (customer)
     bm_join_yr = """
@@ -309,98 +330,7 @@ def kpi_snapshot():
     """
 
     # -------- Targets helper (by region) using customer table
-    def fetch_targets_for_region(reg_filter):
-        where, params = ["t.QA = %s", "t.Month BETWEEN 1 AND 7"], [qa]
-        item = CATEGORY_RULES.get(category, CATEGORY_RULES["ALL"])["item"]
-        if item and item != "ALL":
-            where.append("t.Item = %s"); params.append(item)
-        if salesman and salesman != "ALL":
-            where.append("UPPER(TRIM(t.Salesman_name)) = UPPER(TRIM(%s))"); params.append(salesman)
-        # Scope to region via customer
-        if reg_filter and reg_filter != "ALL":
-            where.append("""
-              EXISTS (
-                SELECT 1 FROM customer cus
-                 WHERE UPPER(TRIM(cus.Salesman_Name)) = UPPER(TRIM(t.Salesman_name))
-                   AND cus.bde_State = %s
-              )""")
-            params.append(reg_filter)
-        # Scope to group via customer
-        if sold_to_group and sold_to_group != "ALL":
-            where.append("""
-              EXISTS (
-                SELECT 1 FROM customer cus2
-                 WHERE UPPER(TRIM(cus2.Salesman_Name)) = UPPER(TRIM(t.Salesman_name))
-                   AND cus2.sold_to_group = %s
-              )""")
-            params.append(sold_to_group)
-
-        sql = f"""
-          SELECT UPPER(TRIM(t.Salesman_name)) AS salesman, t.Month, SUM(t.Value) AS v
-            FROM target t
-           WHERE {" AND ".join(where)}
-           GROUP BY UPPER(TRIM(t.Salesman_name)), t.Month
-        """
-        return sql, params
-
-    # -------- run queries
-    try:
-        conn = get_connection()
-        if conn is None:
-            return jsonify({"error": "db_unavailable"}), 503
-        cur  = conn.cursor(dictionary=True)
-
-        # Q1/Q2 actuals
-        cur.execute(sql_m, tuple(prm_m))
-        for r in cur.fetchall():
-            reg = (r["region"] or "").strip().upper()
-            bde = r["salesman"]
-            if reg not in wanted_regions:
-                continue
-            key = (reg, bde)
-            arr = actual.setdefault(key, months12())
-            mth = int(r["mth"])
-            if 1 <= mth <= 12:
-                arr[mth] += float(r["v"] or 0)
-
-        # July actuals
-        cur.execute(sql_j, tuple(prm_j))
-        for r in cur.fetchall():
-            reg = (r["region"] or "").strip().upper()
-            bde = r["salesman"]
-            if reg not in wanted_regions:
-                continue
-            key = (reg, bde)
-            arr = actual.setdefault(key, months12())
-            arr[7] += float(r["v"] or 0)
-
-        # Targets per region
-        targets_per_region = {}
-        for reg in wanted_regions:
-            sql_t, prm_t = fetch_targets_for_region(reg)
-            cur.execute(sql_t, tuple(prm_t))
-            reg_map = {}
-            for r in cur.fetchall():
-                bde = r["salesman"]
-                key = (reg, bde)
-                arr = reg_map.setdefault(key, months12())
-                mth = int(r["Month"])
-                if 1 <= mth <= 12:
-                    arr[mth] += float(r["v"] or 0)
-            targets_per_region[reg] = reg_map
-            # merge into global target
-            for key, arr in reg_map.items():
-                tot = target.setdefault(key, months12())
-                for i in range(1, 8):
-                    tot[i] += arr[i]
-
-        cur.close(); conn.close()
-    except Exception as e:
-        try:
-            cur.close(); conn.close()
-        except Exception:
-            pass
-        return jsonify({"error": str(e)}), 500
+    
 
     # -------- packers
     def pack(arr_a, arr_t):
@@ -452,7 +382,7 @@ def daily_sales():
     joins, wh, params = build_customer_filters("s", f, use_sold_to_name=False)
 
     # category
-    cat_joins, cat_where = category_filters_monthly("s", f["category"])
+    cat_joins, cat_where = category_filters("s", f["category"])
     joins += cat_joins
     wh    += cat_where
 
@@ -514,7 +444,7 @@ def daily_breakdown():
 
     # ---- Build base JOINs / WHEREs (consistent helpers) ----
     joins, wh, params = build_customer_filters("s", f, use_sold_to_name=False)
-    cat_joins, cat_where = category_filters_monthly("s", f["category"])
+    cat_joins, cat_where = category_filters("s", f["category"])
     joins += cat_joins
     wh    += cat_where
 
@@ -578,7 +508,7 @@ def monthly_sales():
     joins, wh, params = build_customer_filters("s", f, use_sold_to_name=False)
 
     # category
-    cat_joins, cat_where = category_filters_monthly("s", f["category"])
+    cat_joins, cat_where = category_filters("s", f["category"])
     joins += cat_joins
     wh    += cat_where
 
@@ -606,72 +536,6 @@ def monthly_sales():
         cur.close(); conn.close()
 
     month_map = {int(r["month_num"]): float(r["monthly_total"] or 0) for r in rows}
-    return jsonify([{"month": m, "value": month_map.get(m, 0)} for m in range(1, 13)])
-
-# ----------------------------- Monthly Target --------------------------------
-@app.get("/api/monthly_target")
-def monthly_target():
-
-    metric   = (request.args.get("metric", "qty") or "qty").lower().strip()
-    qa       = "Q" if metric == "qty" else "A"
-
-    category = (request.args.get("category", "ALL") or "ALL").upper()
-    item     = CATEGORY_RULES.get(category, CATEGORY_RULES["ALL"])["item"]
-
-    region        = (request.args.get("region", "ALL") or "ALL").strip()
-    sold_to_group = (request.args.get("sold_to_group", "ALL") or "ALL").strip()
-    sold_to       = (request.args.get("sold_to", "ALL") or "ALL").strip()
-    salesman      = (request.args.get("salesman", "ALL") or "ALL").strip()
-
-    where, params = ["t.QA = %s"], [qa]
-
-    if item != "ALL":
-        where.append("t.Item = %s")
-        params.append(item)
-
-    if salesman and salesman != "ALL":
-        where.append("UPPER(TRIM(t.Salesman_name)) = UPPER(TRIM(%s))")
-        params.append(salesman)
-
-    # Region filter via bde_mapping
-    if region and region != "ALL":
-        where.append("""
-          EXISTS (
-            SELECT 1
-              FROM customer cus
-             WHERE UPPER(TRIM(cus.salesman_name)) = UPPER(TRIM(t.Salesman_name))
-               AND cus.bde_state = %s
-          )
-        """)
-        params.append(region)
-
-
-    sql = f"""
-      SELECT t.Month AS month_num, SUM(t.Value) AS monthly_target
-        FROM target t
-       WHERE {' AND '.join(where)}
-       GROUP BY t.Month
-       ORDER BY t.Month
-    """
-
-    try:
-        conn = get_connection()
-        cur  = conn.cursor(dictionary=True)
-        cur.execute(sql, tuple(params))
-        rows = cur.fetchall()
-    except Exception as e:
-        try:
-            cur.close(); conn.close()
-        except Exception:
-            pass
-        return jsonify({"error": str(e)}), 500
-    finally:
-        try:
-            cur.close(); conn.close()
-        except:
-            pass
-
-    month_map = {int(r["month_num"]): float(r["monthly_target"] or 0) for r in rows}
     return jsonify([{"month": m, "value": month_map.get(m, 0)} for m in range(1, 13)])
 
 
@@ -706,7 +570,7 @@ def monthly_breakdown():
 
     # ---- Build base JOINs / WHEREs (consistent helpers) ----
     joins, wh, params = build_customer_filters("s", f, use_sold_to_name=False)
-    cat_joins, cat_where = category_filters_monthly("s", f["category"])
+    cat_joins, cat_where = category_filters("s", f["category"])
     joins += cat_joins
     wh    += cat_where
 
@@ -762,6 +626,80 @@ def monthly_breakdown():
 
     return jsonify(rows)
 
+# ----------------------------- Daily Target (Oct) ---------------------------------
+@app.get("/api/daily_target")
+def daily_target():
+    f = parse_filters(request)
+
+    # targets table uses Q (qty) / A (amount)
+    value_col = "Q" if f["metric"] == "qty" else "A"
+
+    joins, wh, params = build_customer_filters("t", f, use_sold_to_name=False)
+
+    # target-specific category filter (Special must be blank etc.)
+    cat_joins, cat_where = category_target_filters("t", f.get("category_target", f.get("category", "ALL")))
+    joins += cat_joins
+    wh    += cat_where
+
+    # Only October
+    wh.append("t.Month = %s")
+    params.append(10)
+
+    where_sql = ("WHERE " + " AND ".join(wh)) if wh else ""
+    sql = f"""
+        SELECT COALESCE(SUM(t.{value_col}), 0) AS monthly_total
+          FROM target2025 t
+          {' '.join(joins)}
+          {where_sql}
+    """
+
+    conn = get_connection(); cur = conn.cursor(dictionary=True)
+    try:
+        cur.execute(sql, tuple(params))
+        row = cur.fetchall()
+    finally:
+        cur.close(); conn.close()
+
+    total = float((row or {}).get("monthly_total", 0))
+    days  = 31  # October
+    per_day = round(total / days, 2) if days else 0.0
+
+    return jsonify([{"day": d, "value": per_day} for d in range(1, days + 1)])
+
+# ----------------------------- Monthly Target ---------------------------------
+@app.get("/api/monthly_target")
+def monthly_target():
+    f = parse_filters(request)
+    value = "Qty" if f["metric"] == "qty" else "Amt"
+
+    joins, wh, params = build_customer_filters("t", f, use_sold_to_name=False)
+
+    # category
+    cat_joins, cat_where = category_target_filters("t", f["category"])
+    joins += cat_joins
+    wh    += cat_where
+
+
+    where_sql = ("WHERE " + " AND ".join(wh)) if wh else ""
+    sql = f"""
+      SELECT t.Month AS month_num, SUM(t.{value}) AS monthly_total
+        FROM target2025 t
+        {' '.join(joins)}
+        {where_sql}
+       GROUP BY t.Month
+       ORDER BY t.Month
+    """
+
+    conn = get_connection(); cur = conn.cursor(dictionary=True)
+    try:
+        cur.execute(sql, tuple(params))
+        rows = cur.fetchall()
+    finally:
+        cur.close(); conn.close()
+
+    month_map = {int(r["month_num"]): float(r["monthly_total"] or 0) for r in rows}
+    return jsonify([{"month": m, "value": month_map.get(m, 0)} for m in range(1, 13)])
+
 # ----------------------------- Yearly Sales ---------------------------------
 @app.get("/api/yearly_sales")
 def yearly_sales():
@@ -771,7 +709,7 @@ def yearly_sales():
     joins, wh, params = build_customer_filters("s", f, use_sold_to_name=False)
 
     # category
-    cat_joins, cat_where = category_filters_monthly("s", f["category"])
+    cat_joins, cat_where = category_filters("s", f["category"])
     joins += cat_joins
     wh    += cat_where
 
@@ -799,7 +737,7 @@ def yearly_sales():
         cur.close(); conn.close()
 
     year_map = {int(r["year_num"]): float(r["yearly_total"] or 0) for r in rows}
-    return jsonify([{"year": m, "value": year_map.get(m, 0)} for m in range(2021, 2025)])    
+    return jsonify([{"year": y, "value": year_map.get(y, 0)} for y in range(2021, 2025)])    
 
 
 # -------------------- yearly breakdown (stacked by group) -------------------
@@ -833,7 +771,7 @@ def yearly_breakdown():
 
     # ---- Build base JOINs / WHEREs (consistent helpers) ----
     joins, wh, params = build_customer_filters("s", f, use_sold_to_name=False)
-    cat_joins, cat_where = category_filters_monthly("s", f["category"])
+    cat_joins, cat_where = category_filters("s", f["category"])
     joins += cat_joins
     wh    += cat_where
 
@@ -998,10 +936,7 @@ def top_customers_2025():
     ship_to       = request.args.get("ship_to", "ALL")
     pattern       = request.args.get("pattern", "ALL")
 
-    cat_rule  = CATEGORY_RULES_MONTHLY.get(category, CATEGORY_RULES_MONTHLY["ALL"])
-    cat_join  = cat_rule.get("join", "")
-    cat_where = cat_rule.get("where", [])[:]
-
+ 
     where, params = [], []
     bm_join = """
         JOIN bde_mapping bm
@@ -1060,119 +995,15 @@ def patterns():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# -------------------------- Region KPIs (summary) ----------------------------
-@app.get("/api/region_kpis")
-def region_kpis():
-    metric        = (request.args.get("metric", "qty") or "qty").lower().strip()
-    qa            = "Q" if metric == "qty" else "A"
-    value_js      = "billqty_in_SKU" if metric == "qty" else "net_value"
 
-    category      = (request.args.get("category", "ALL") or "ALL").upper()
-    region_arg    = request.args.get("region", "ALL")
-    salesman      = request.args.get("salesman", "ALL")
-    sold_to_group = request.args.get("sold_to_group", "ALL")
-    sold_to       = request.args.get("sold_to", "ALL")
-    product_group = request.args.get("product_group", "ALL")
-
-    regions = ["NSW","QLD","VIC","WA"]
-    if region_arg and region_arg != "ALL":
-        regions = [region_arg]
-
-    rule         = CATEGORY_RULES.get(category, CATEGORY_RULES["ALL"])
-    cat_join_js  = rule.get("sales_join", "")
-    cat_where_js = rule.get("sales_where", [])[:]
-    target_item  = rule.get("item", "Overall Sales")
-
-    bm_join_js = """
-        JOIN bde_mapping bm
-          ON REGEXP_REPLACE(TRIM(CAST(bm.Ship_To AS CHAR)), '[^0-9A-Za-z]', '') =
-             REGEXP_REPLACE(TRIM(CAST(j.ship_to  AS CHAR)), '[^0-9A-Za-z]', '')
-    """
-
-    act_where, act_params = [], []
-    act_where.append("UPPER(TRIM(bm.State)) IN (" + ",".join(["%s"]*len(regions)) + ")")
-    act_params.extend(regions)
-    if salesman and salesman != "ALL":    act_where.append("UPPER(TRIM(bm.BDE)) = UPPER(TRIM(%s))"); act_params.append(salesman)
-    if sold_to_group and sold_to_group != "ALL": act_where.append("bm.STG3 = %s"); act_params.append(sold_to_group)
-    if sold_to and sold_to != "ALL":      act_where.append("j.sold_to_name = %s"); act_params.append(sold_to)
-    if product_group and product_group != "ALL": act_where.append("c.product_group = %s"); act_params.append(product_group)
-    act_where.extend(cat_where_js)
-    act_where_sql = ("WHERE " + " AND ".join(act_where)) if act_where else ""
-
-    bde_state_where, bde_state_params = [], []
-    bde_state_where.append("UPPER(TRIM(State)) IN (" + ",".join(["%s"]*len(regions)) + ")")
-    bde_state_params.extend(regions)
-    if sold_to_group and sold_to_group != "ALL": bde_state_where.append("STG3 = %s"); bde_state_params.append(sold_to_group)
-    if sold_to and sold_to != "ALL":             bde_state_where.append("TRIM(Sold_To) = TRIM(%s)"); bde_state_params.append(sold_to)
-
-    tgt_where, tgt_params = ["t.QA = %s", "t.Month = 7"], [qa]
-    if target_item and target_item != "ALL": tgt_where.append("t.Item = %s"); tgt_params.append(target_item)
-    if salesman and salesman != "ALL":       tgt_where.append("UPPER(TRIM(t.Salesman)) = UPPER(TRIM(%s))"); tgt_params.append(salesman)
-    tgt_where_sql = " AND ".join(tgt_where)
-
-    sql_actuals = f"""
-        SELECT UPPER(TRIM(bm.State)) AS region,
-               MAX(DAY(j.billing_date)) AS last_day,
-               SUM(j.{value_js}) AS actual
-        FROM julysales j
-        JOIN carrying_july c ON j.material = c.M_CODE
-        {bm_join_js}
-        {cat_join_js}
-        {act_where_sql}
-        GROUP BY UPPER(TRIM(bm.State))
-    """
-    sql_targets = f"""
-        WITH bde_state AS (
-          SELECT DISTINCT UPPER(TRIM(BDE)) AS BDE, UPPER(TRIM(State)) AS State
-          FROM bde_mapping
-          WHERE {" AND ".join(bde_state_where)}
-        )
-        SELECT bs.State AS region, SUM(t.Value) AS month_target
-        FROM target t
-        JOIN bde_state bs ON bs.BDE = UPPER(TRIM(t.Salesman))
-        WHERE {tgt_where_sql}
-        GROUP BY bs.State
-    """
-
-    try:
-        conn = get_connection()
-        cur  = conn.cursor(dictionary=True)
-
-        cur.execute(sql_actuals, tuple(act_params))
-        act_rows = cur.fetchall()
-        act_map = { (r["region"] or "").upper(): {
-            "actual": float(r["actual"] or 0),
-            "last_day": int(r["last_day"] or 0),
-        } for r in act_rows }
-
-        cur.execute(sql_targets, tuple(bde_state_params + tgt_params))
-        tgt_rows = cur.fetchall()
-        tgt_map = { (r["region"] or "").upper(): float(r["month_target"] or 0) for r in tgt_rows }
-
-        cur.close(); conn.close()
-
-        out = []
-        for reg in regions:
-            a = act_map.get(reg, {"actual": 0, "last_day": 0})
-            month_target = tgt_map.get(reg, 0)
-            mtd_target = (month_target / 31) * (a["last_day"] or 0)
-            pct = round((a["actual"] / mtd_target) * 100.0, 0) if mtd_target > 0 else 0
-            out.append({
-                "region": reg,
-                "actual": round(a["actual"], 0),
-                "target": round(mtd_target, 0),
-                "pct": pct
-            })
-        return jsonify(out)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    
 
 @app.get("/api/profit_monthly")
 def profit_monthly():
     f = parse_filters(request)
 
     joins, wh, params = build_customer_filters("p", f, use_sold_to_name=False)
-    cat_joins, cat_where = category_filters_monthly("p", f["category"])
+    cat_joins, cat_where = category_filters("p", f["category"])
     joins += cat_joins
     wh    += cat_where
 
@@ -1212,261 +1043,7 @@ def profit_monthly():
         })
     return jsonify(out)
 
-# ------------------------------ Quarterly KPI --------------------------------
-@app.get("/api/quarterly_achievement")
-def quarterly_achievement():
-    metric   = (request.args.get("metric", "qty") or "qty").lower().strip()
-    value_yr = "Qty" if metric == "qty" else "Amt"
-    value_js = "billqty_in_SKU" if metric == "qty" else "net_value"
-    qa       = "Q" if metric == "qty" else "A"
-
-    category      = (request.args.get("category", "ALL") or "ALL").upper()
-    region        = request.args.get("region", "ALL")
-    salesman      = request.args.get("salesman", "ALL")
-    sold_to_group = request.args.get("sold_to_group", "ALL")
-    sold_to       = request.args.get("sold_to", "ALL")
-    product_group = request.args.get("product_group", "ALL")
-    ship_to       = request.args.get("ship_to", "ALL")
-    pattern       = request.args.get("pattern", "ALL")
-    as_of         = (request.args.get("as_of", "today") or "today").lower()
-
-    cat_rule_m = CATEGORY_RULES_MONTHLY.get(category, CATEGORY_RULES_MONTHLY["ALL"])
-    cat_join_m  = cat_rule_m.get("join", "")
-    cat_where_m = cat_rule_m.get("where", [])[:]
-
-    cat_rule_d = CATEGORY_RULES.get(category, CATEGORY_RULES["ALL"])
-    cat_join_d  = cat_rule_d.get("sales_join", "")
-    cat_where_d = cat_rule_d.get("sales_where", [])[:]
-
-    bm_join_yr = """
-        JOIN bde_mapping bm
-          ON REGEXP_REPLACE(TRIM(CAST(bm.Ship_To AS CHAR)), '[^0-9A-Za-z]', '') =
-             REGEXP_REPLACE(TRIM(CAST(s.Ship_To  AS CHAR)), '[^0-9A-Za-z]', '')
-    """
-    bm_join_js = """
-        JOIN bde_mapping bm
-          ON REGEXP_REPLACE(TRIM(CAST(bm.Ship_To AS CHAR)), '[^0-9A-Za-z]', '') =
-             REGEXP_REPLACE(TRIM(CAST(j.ship_to  AS CHAR)), '[^0-9A-Za-z]', '')
-    """
-
-    wh_yr, params_yr = [], []
-    if region and region != "ALL":        wh_yr.append("bm.State = %s"),        params_yr.append(region)
-    if salesman and salesman != "ALL":    wh_yr.append("UPPER(TRIM(bm.BDE)) = UPPER(TRIM(%s))"), params_yr.append(salesman)
-    if sold_to_group and sold_to_group != "ALL": wh_yr.append("bm.STG3 = %s"), params_yr.append(sold_to_group)
-    if sold_to and sold_to != "ALL":
-        if sold_to.isdigit() or sold_to.upper().startswith("A"):
-            wh_yr.append(
-                "REGEXP_REPLACE(UPPER(TRIM(CAST(s.Sold_To AS CHAR))), '[^A-Z0-9]', '') = "
-                "REGEXP_REPLACE(UPPER(TRIM(%s)), '[^A-Z0-9]', '')"
-            ); params_yr.append(sold_to)
-        else:
-            wh_yr.append("s.Sold_To_Name = %s"), params_yr.append(sold_to)
-    if product_group and product_group != "ALL": wh_yr.append("s.Product_Group = %s"), params_yr.append(product_group)
-    if ship_to and ship_to != "ALL":             wh_yr.append("s.Sold_To_Name = %s"), params_yr.append(ship_to)
-    if pattern and pattern != "ALL":             wh_yr.append("s.Pattern = %s"),      params_yr.append(pattern)
-    wh_yr.extend(cat_where_m)
-    where_sql_yr = ("WHERE " + " AND ".join(wh_yr)) if wh_yr else ""
-
-    wh_js, params_js = [], []
-    if region and region != "ALL":        wh_js.append("bm.State = %s"),        params_js.append(region)
-    if salesman and salesman != "ALL":    wh_js.append("UPPER(TRIM(bm.BDE)) = UPPER(TRIM(%s))"), params_js.append(salesman)
-    if sold_to_group and sold_to_group != "ALL": wh_js.append("bm.STG3 = %s"), params_js.append(sold_to_group)
-    if sold_to and sold_to != "ALL":      wh_js.append("j.sold_to_name = %s"),  params_js.append(sold_to)
-    if product_group and product_group != "ALL": wh_js.append("c.product_group = %s"), params_js.append(product_group)
-    if ship_to and ship_to != "ALL":      wh_js.append("j.ship_to_name = %s"),  params_js.append(ship_to)
-    if pattern and pattern != "ALL":      wh_js.append("j.Pattern = %s"),       params_js.append(pattern)
-    wh_js.extend(cat_where_d)
-    where_sql_js = ("WHERE " + " AND ".join(wh_js)) if wh_js else ""
-
-    def build_target_where(months):
-        tw, tp = ["t.QA = %s", f"t.Month IN ({','.join(['%s']*len(months))})"], [qa, *months]
-        item = CATEGORY_RULES.get(category, CATEGORY_RULES["ALL"])["item"]
-        if item != "ALL": tw.append("t.Item = %s"); tp.append(item)
-        if salesman and salesman != "ALL":
-            tw.append("UPPER(TRIM(t.Salesman)) = UPPER(TRIM(%s))"); tp.append(salesman)
-        if region and region != "ALL":
-            tw.append("""
-                EXISTS (SELECT 1 FROM bde_mapping bm_r
-                        WHERE UPPER(TRIM(bm_r.BDE)) = UPPER(TRIM(t.Salesman))
-                          AND bm_r.State = %s)"""); tp.append(region)
-        if sold_to_group and sold_to_group != "ALL":
-            tw.append("""
-                EXISTS (SELECT 1 FROM bde_mapping bm_g
-                        WHERE UPPER(TRIM(bm_g.BDE)) = UPPER(TRIM(t.Salesman))
-                          AND bm_g.STG3 = %s)"""); tp.append(sold_to_group)
-        return " AND ".join(tw), tp
-
-    sql_q1_actual = f"""
-        SELECT COALESCE(SUM(s.{value_yr}),0) AS v
-        FROM sales2025 s
-        {bm_join_yr}
-        {cat_join_m}
-        {where_sql_yr}
-          AND s.Month IN (1,2,3)
-    """
-    sql_q2_actual = f"""
-        SELECT COALESCE(SUM(s.{value_yr}),0) AS v
-        FROM sales2025 s
-        {bm_join_yr}
-        {cat_join_m}
-        {where_sql_yr}
-          AND s.Month IN (4,5,6)
-    """
-    sql_july_actual = f"""
-        SELECT COALESCE(SUM(j.{value_js}),0) AS v,
-               COALESCE(MAX(DAY(j.billing_date)),0) AS last_day
-        FROM julysales j
-        JOIN carrying_july c ON j.material = c.M_CODE
-        {bm_join_js}
-        {cat_join_d}
-        {where_sql_js}
-    """
-
-    w_q1, p_q1 = build_target_where([1,2,3])
-    sql_q1_target = f"SELECT COALESCE(SUM(t.Value),0) AS v FROM target t WHERE {w_q1}"
-    w_q2, p_q2 = build_target_where([4,5,6])
-    sql_q2_target = f"SELECT COALESCE(SUM(t.Value),0) AS v FROM target t WHERE {w_q2}"
-    w_july, p_july = build_target_where([7])
-    sql_july_target = f"SELECT COALESCE(SUM(t.Value),0) AS v FROM target t WHERE {w_july}"
-
-    try:
-        conn = get_connection()
-        cur  = conn.cursor(dictionary=True)
-        cur.execute(sql_q1_actual, tuple(params_yr)); q1_actual = float(cur.fetchone()["v"] or 0)
-        cur.execute(sql_q2_actual, tuple(params_yr)); q2_actual = float(cur.fetchone()["v"] or 0)
-        cur.execute(sql_july_actual, tuple(params_js)); row_j = cur.fetchone() or {"v": 0, "last_day": 0}
-        july_actual = float(row_j["v"] or 0); last_day = int(row_j["last_day"] or 0)
-        cur.execute(sql_q1_target, tuple(p_q1)); q1_target = float((cur.fetchone() or {"v":0})["v"] or 0)
-        cur.execute(sql_q2_target, tuple(p_q2)); q2_target = float((cur.fetchone() or {"v":0})["v"] or 0)
-        cur.execute(sql_july_target, tuple(p_july)); july_target_full = float((cur.fetchone() or {"v":0})["v"] or 0)
-        cur.close(); conn.close()
-    except Exception as e:
-        try:
-            cur.close(); conn.close()
-        except Exception:
-            pass
-        return jsonify({"error": str(e)}), 500
-
-    if as_of in ("today","now","current"):
-        from datetime import date
-        as_of_days = min(date.today().day, 31)
-    else:
-        as_of_days = max(min(last_day, 31), 0)
-
-    july_target_scaled = (july_target_full / 31) * as_of_days if july_target_full else 0
-    def pct(a, t): return round((a / t * 100.0), 0) if t else 0
-
-    q1 = {"actual": round(q1_actual, 0), "target": round(q1_target, 0), "pct": pct(q1_actual, q1_target)}
-    q2 = {"actual": round(q2_actual, 0), "target": round(q2_target, 0), "pct": pct(q2_actual, q2_target)}
-    q3_to_date = {
-        "actual": round(july_actual, 0),
-        "target": round(july_target_scaled, 0),
-        "pct": pct(july_actual, july_target_scaled),
-        "july_target_full": round(july_target_full, 0),
-        "as_of_days": as_of_days
-    }
-    return jsonify({"as_of": as_of, "q1": q1, "q2": q2, "q3_to_date": q3_to_date})
-
-
-    metric = (request.args.get("metric", "qty") or "qty").lower().strip()
-    value_field = "Qty" if metric == "qty" else "Amt"
-    category      = (request.args.get("category", "ALL") or "ALL").upper()
-    region        = request.args.get("region", "ALL")
-    salesman      = request.args.get("salesman", "ALL")
-    sold_to_group = request.args.get("sold_to_group", "ALL")
-    sold_to       = request.args.get("sold_to", "ALL")
-    product_group = request.args.get("product_group", "ALL")
-    group_by      = request.args.get("group_by", "region")
-    ship_to       = request.args.get("ship_to", "ALL")
-    pattern       = request.args.get("pattern", "ALL")
-    top_only = request.args.get("top_only", "0") in ("1", "true", "True")
-    try:
-        top_n = int(request.args.get("top_n", "10") or 10)
-    except Exception:
-        top_n = 10
-
-    group_cols = {
-        "product_group": "s.Product_Group",
-        "region":        "bm.State",
-        "salesman":      "bm.BDE",
-        "sold_to_group": "bm.STG3",
-        "sold_to":       "s.Sold_To_Name",
-    }
-    if group_by not in group_cols:
-        return jsonify([])
-
-    group_col = group_cols[group_by]
-    cat_rule  = CATEGORY_RULES_MONTHLY.get(category, CATEGORY_RULES_MONTHLY["ALL"])
-    cat_join  = cat_rule.get("join", "")
-    cat_where = cat_rule.get("where", [])[:]
-
-    join_bde = """
-        LEFT JOIN bde_mapping bm
-               ON REGEXP_REPLACE(UPPER(TRIM(CAST(bm.Ship_To AS CHAR))), '[^A-Z0-9]', '') =
-                  REGEXP_REPLACE(UPPER(TRIM(CAST(s.Sold_To  AS CHAR))), '[^A-Z0-9]', '')
-    """
-
-    where, params = [], []
-    where.extend(cat_where)
-    if region and region != "ALL":        where.append("bm.State = %s");        params.append(region)
-    if salesman and salesman != "ALL":    where.append("UPPER(TRIM(bm.BDE)) = UPPER(TRIM(%s))"); params.append(salesman)
-    if sold_to_group and sold_to_group != "ALL": where.append("bm.STG3 = %s");  params.append(sold_to_group)
-    if sold_to and sold_to != "ALL":
-        if sold_to.isdigit() or sold_to.upper().startswith("A"):
-            where.append(
-                "REGEXP_REPLACE(UPPER(TRIM(CAST(s.Sold_To AS CHAR))), '[^A-Z0-9]', '') = "
-                "REGEXP_REPLACE(UPPER(TRIM(%s)), '[^A-Z0-9]', '')"
-            ); params.append(sold_to)
-        else:
-            where.append("s.Sold_To_Name = %s"); params.append(sold_to)
-    if product_group and product_group != "ALL": where.append("s.Product_Group = %s");  params.append(product_group)
-    if ship_to and ship_to != "ALL":      where.append("j.ship_to_name = %s");   params.append(ship_to)
-    if pattern and pattern != "ALL":      where.append("j.Pattern = %s");        params.append(pattern)
-    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
-
-    top_cte = ""
-    top_join = ""
-    top_params: list = []
-    if top_only and group_by == "sold_to" and (sold_to in (None, "", "ALL")):
-        top_cte = f"""
-          WITH top_sold AS (
-            SELECT s.Sold_To_Name
-            FROM sales21to24 s
-            {join_bde}
-            {cat_join}
-            {where_sql}
-            GROUP BY s.Sold_To_Name
-            ORDER BY SUM(s.{value_field}) DESC
-            LIMIT %s
-          )
-        """
-        top_join = "JOIN top_sold ts ON ts.Sold_To_Name = s.Sold_To_Name"
-        top_params = [top_n]
-
-    sql = f"""
-        {top_cte}
-        SELECT
-            s.`Year` AS year,
-            COALESCE({group_col}, 'COMMON') AS group_label,
-            SUM(s.{value_field}) AS value
-        FROM sales21to24 s
-        {join_bde}
-        {cat_join}
-        {top_join}
-        {where_sql}
-        GROUP BY s.`Year`, {group_col}
-        ORDER BY s.`Year`
-    """
-    try:
-        conn = get_connection()
-        cur = conn.cursor(dictionary=True)
-        cur.execute(sql, tuple(top_params + params))
-        rows = cur.fetchall()
-        cur.close(); conn.close()
-        return jsonify(rows)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
+    
 # ------------------------------------------------------------------------------
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))   # Cloudtype probes 5000
