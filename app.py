@@ -205,7 +205,9 @@ def get_connection():
         # temporary: don't kill the app, just log
         print("DB connection failed:", e)
         return None
-
+@app.get("/api/ping")
+def ping():
+    return {"ok": True}
 
 # ------------------------------------------------------------------------------
 @app.get("/")
