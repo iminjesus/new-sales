@@ -2,7 +2,11 @@ from flask import Flask, request, jsonify, send_from_directory
 import mysql.connector
 from time import time  # cache timestamps
 import os
+import requests
 from flask_cors import CORS
+
+
+
 # --------------------------- tiny cache (unchanged) ---------------------------
 _KPI_CACHE = {}
 def cache_get(namespace: str, key: str, ttl: int = 60):
@@ -208,6 +212,13 @@ def get_connection():
 @app.get("/api/ping")
 def ping():
     return {"ok": True}
+@app.get("/api/egress_ip")
+def egress_ip():
+    try:
+        ip = requests.get("https://api.ipify.org", timeout=5).text
+        return {"ip": ip}
+    except Exception as e:
+        return {"error": str(e)}, 500
 
 # ------------------------------------------------------------------------------
 @app.get("/")
