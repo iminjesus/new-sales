@@ -3,7 +3,7 @@ import mysql.connector
 from time import time  # cache timestamps
 import os
 from flask_cors import CORS
-import requests
+
 
 
 # --------------------------- tiny cache (unchanged) ---------------------------
