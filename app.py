@@ -214,7 +214,7 @@ def get_connection():
     if USE_SQLITE:
         conn = sqlite3.connect(SQLITE_PATH)
         conn.row_factory = sqlite3.Row  # rows behave like dicts
-        return conn
+        return SQLiteConnectionWrapper(conn)
 
     # Otherwise use MySQL (your current local setup)
     cfg = {
