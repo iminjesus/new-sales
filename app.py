@@ -9,6 +9,18 @@ USE_SQLITE = os.environ.get("USE_SQLITE") == "1"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SQLITE_PATH = os.path.join(BASE_DIR, "snapshot.db")
 
+class SQLiteConnectionWrapper:
+    def __init__(self, conn):
+        self._conn = conn
+
+    def cursor(self, *args, **kwargs):
+        # ignore any "dictionary=" kwarg that mysql.connector uses
+        kwargs.pop("dictionary", None)
+        return self._conn.cursor(*args, **kwargs)
+
+    # delegate everything else to the real connection
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
 
 # --------------------------- tiny cache (unchanged) ---------------------------
 _KPI_CACHE = {}

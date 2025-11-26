@@ -41,7 +41,7 @@ const filters={
   pattern:"ALL",          
   category:"ALL",
   category_target:"ALL",
-  top_limit: "ALL"   
+  top_limit: 0   
 };
 
 const mapFilters = {
@@ -56,7 +56,7 @@ const mapFilters = {
   pattern:"ALL",          
   category:"ALL",
   category_target:"ALL",
-  top_limit: "ALL"   
+  top_limit: 0   
 };
 
 let dailyInst,dailyCumInst,monthlyInst,monthlyCumInst,yearlyInst,monthlyTargetInst,
