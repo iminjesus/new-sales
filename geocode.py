@@ -1,199 +1,224 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-Geocode a list of addresses using OpenStreetMap's Nominatim API.
-
-Usage:
-  python geocode_addresses.py
-  python geocode_addresses.py --input addresses.txt
-  python geocode_addresses.py --input addresses.csv --column address
-  python geocode_addresses.py --country "Australia" --delay 1.2 --retries 3
-
-Notes:
-- Be respectful of Nominatim usage policy: add delays, set a descriptive User-Agent,
-  and avoid bulk/automated high-volume usage.
-- If you have a Google Maps API key and prefer that, see the commented section at the bottom.
-"""
-
-import argparse
 import csv
-import sys
 import time
-import json
 import os
-from typing import Iterable, List, Optional, Dict
-import urllib.parse
-import urllib.request
-import urllib.error
+import requests
 
-DEFAULT_ADDRESSES = [
-    "5 WARWICK AVENUE",
-    "192 PRINCES DR",
-    "440 STUART HWY",
-    "195 JUBILEE HWY",
-    "169 KINGHORNE STREET",
-    "1/2 PINE STREET",
-    "2/34 ESSINGTON ST",
-    "100 FINLAY ROAD",
-    "8 GAUGE CIRCUIT",
-    "260 SHELLHARBOUR ROAD",
-    "1439 SOUTH GIPPSLAND HWY",
-    "83 TINGAL ROAD",
-    "1 GRANT STREET",
-    "192 PRINCES DR",
-    "UNIT 6/3 STOUT ROAD",
-    "9B BLENHEIM STREET",
-    "2 - 72 HALLAM SOUTH RD",
-    "3 PIKE ST",
-    "141 REGENCY ROAD",
-    "23 ELIZABETH WAY",
-    "17/19 MAIN N RD",
-    "2/675 GYMPIE RD",
-    "UNIT 1-13 SMITH ST",
-    "93 LONSDALE ST",
-]
+INPUT_FILE = "addresses_1.csv"             # your exported CSV from Excel
+OUTPUT_FILE = "addresses_1_geocoded.csv"   # final output
+CACHE_FILE = "geocode_1_cache.csv"         # progress cache
 
-def read_addresses(path: Optional[str], column: Optional[str]) -> List[str]:
-    if not path:
-        return DEFAULT_ADDRESSES[:]
-    if not os.path.exists(path):
-        raise FileNotFoundError(path)
-    # detect simple text vs CSV
-    _, ext = os.path.splitext(path.lower())
-    if ext in (".csv", ".tsv"):
-        sep = "," if ext == ".csv" else "\t"
-        with open(path, "r", encoding="utf-8-sig", newline="") as f:
-            reader = csv.DictReader(f, delimiter=sep)
-            if column is None:
-                # guess the first column
-                field = reader.fieldnames[0] if reader.fieldnames else None
-                if not field:
-                    return []
-                column = field
-            out = []
-            for row in reader:
-                val = (row.get(column) or "").strip()
-                if val:
-                    out.append(val)
-            return out
-    else:
-        # one address per line
-        with open(path, "r", encoding="utf-8") as f:
-            return [line.strip() for line in f if line.strip()]
+# Column names (as they appear in your CSV header)
+ADDRESS1_COL = "Address 1"
+CITY_COL = "City"
+REGION_COLS = ("Region", "Regio")        # try these, use whichever exists
+POSTCODE_COLS = ("Postal Code", "Postal Cod")
+COUNTRY_COLS = ("Country", "Countr")
 
-def nominatim_geocode(query: str, country: Optional[str], timeout: float, user_agent: str) -> Optional[Dict]:
-    base = "https://nominatim.openstreetmap.org/search"
-    q = query if not country else f"{query}, {country}"
-    params = {
-        "q": q,
-        "format": "json",
-        "addressdetails": 1,
-        "limit": 1,
+
+def pick_col(row, candidates):
+    """Return the first existing non-empty column from candidates."""
+    if isinstance(candidates, str):
+        candidates = (candidates,)
+    for c in candidates:
+        if c in row and row[c] is not None:
+            val = row[c].strip()
+            if val:
+                return val
+    return ""
+
+
+def build_address(row):
+    """Build a full postal address string from the CSV row."""
+    street = pick_col(row, ADDRESS1_COL)
+    city = pick_col(row, CITY_COL)
+    region = pick_col(row, REGION_COLS)
+    postcode = pick_col(row, POSTCODE_COLS)
+    country_code = pick_col(row, COUNTRY_COLS).upper()
+
+    # Map country codes to full country names
+    country_map = {
+        "AU": "Australia",
+        "NZ": "New Zealand",
+        "PG": "Papua New Guinea",
+        "CO": "Colombia",
     }
-    url = f"{base}?{urllib.parse.urlencode(params)}"
-    req = urllib.request.Request(url, headers={
-        "User-Agent": user_agent,
-        "Accept": "application/json",
-    })
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        data = resp.read().decode("utf-8", errors="replace")
-        arr = json.loads(data)
-        if isinstance(arr, list) and arr:
-            return arr[0]
-        return None
+    country = country_map.get(country_code, country_code or "")
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--input", help="Path to .txt (one per line) or .csv/.tsv file")
-    ap.add_argument("--column", help="Column name in CSV/TSV that contains the address")
-    ap.add_argument("--output", default="geocoded.csv", help="Output CSV path")
-    ap.add_argument("--log", default="geocoded.log", help="Log file path")
-    ap.add_argument("--country", default="Australia", help="Optional country suffix appended to each query")
-    ap.add_argument("--delay", type=float, default=1.0, help="Delay between queries, seconds")
-    ap.add_argument("--timeout", type=float, default=15.0, help="HTTP timeout per request, seconds")
-    ap.add_argument("--retries", type=int, default=3, help="Retries per address")
-    ap.add_argument("--user_agent", default="JaydenBhang-Geocoder/1.0 (+contact: you@example.com)", help="HTTP User-Agent per Nominatim policy")
-    args = ap.parse_args()
+    parts = []
 
-    addresses = read_addresses(args.input, args.column)
-    if not addresses:
-        print("No addresses to process.", file=sys.stderr)
-        return 1
+    if street:
+        parts.append(street)
 
-    os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)
+    line2_parts = []
+    if city:
+        line2_parts.append(city)
+    # e.g. "SA 5013"
+    region_post = " ".join(p for p in [region, postcode] if p)
+    if region_post:
+        line2_parts.append(region_post)
+    if line2_parts:
+        parts.append(", ".join(line2_parts))
 
-    # Prepare writers
-    out_fields = [
-        "input_address","query","lat","lon","display_name",
-        "osm_type","osm_id","class","type","importance"
-    ]
-    with open(args.output, "w", encoding="utf-8", newline="") as f_out, \
-         open(args.log, "w", encoding="utf-8") as f_log:
-        writer = csv.DictWriter(f_out, fieldnames=out_fields)
+    if country:
+        parts.append(country)
+
+    return ", ".join(parts)
+
+
+def geocode(address, session):
+    """
+    Geocode using Google Maps Geocoding API.
+    Returns (lat, lon) as strings, or (None, None) if not found.
+    """
+    if not address:
+        return None, None
+
+    url = "https://maps.googleapis.com/maps/api/geocode/json"
+    params = {
+        "address": address,
+        "key": "",  # <-- put your key here
+    }
+
+    resp = session.get(url, params=params, timeout=10)
+    try:
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"HTTP error {resp.status_code} for '{address}': {e}")
+        return None, None
+
+    data = resp.json()
+    status = data.get("status")
+    if status != "OK" or not data.get("results"):
+        print(f"No result ({status}) for '{address}'")
+        return None, None
+
+    loc = data["results"][0]["geometry"]["location"]
+    lat = loc.get("lat")
+    lng = loc.get("lng")
+    return str(lat), str(lng)
+
+
+def load_cache():
+    """
+    Load geocode_cache.csv into a dict keyed by line_index:
+        cache[line_index] = (lat, lon)
+    """
+    cache = {}
+    if not os.path.exists(CACHE_FILE):
+        return cache
+
+    with open(CACHE_FILE, newline="", encoding="utf-8", errors="replace") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            try:
+                line_index = int(row.get("line_index", "").strip())
+            except (ValueError, TypeError):
+                continue
+            lat = row.get("lat") or None
+            lon = row.get("lon") or None
+            cache[line_index] = (lat, lon)
+    return cache
+
+
+def append_to_cache(line_index, built_address, lat, lon):
+    """
+    Append one result (by line index) to geocode_cache.csv.
+    Creates the file with header if it does not exist yet.
+    """
+    file_exists = os.path.exists(CACHE_FILE)
+    write_header = not file_exists or os.path.getsize(CACHE_FILE) == 0
+
+    # IMPORTANT: mode="a" for append, and keep errors="replace" if you added it
+    with open(CACHE_FILE, "a", newline="", encoding="utf-8", errors="replace") as f:
+        fieldnames = ["line_index", "full_address", "lat", "lon"]
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+
+        if write_header:
+            writer.writeheader()
+
+        writer.writerow({
+            "line_index": line_index,
+            "full_address": built_address,
+            "lat": lat,
+            "lon": lon
+        })
+
+def write_output(rows, cache):
+    """
+    Write addresses_geocoded.csv using cache keyed by line index.
+    Keeps all original columns and adds lat/lon at the end.
+    """
+    fieldnames = list(rows[0].keys())
+    if "lat" not in fieldnames:
+        fieldnames.append("lat")
+    if "lon" not in fieldnames:
+        fieldnames.append("lon")
+
+    with open(OUTPUT_FILE, "w", newline="", encoding="utf-8") as f_out:
+        writer = csv.DictWriter(f_out, fieldnames=fieldnames)
         writer.writeheader()
 
-        for i, addr in enumerate(addresses, 1):
-            query = addr.strip()
-            print(f"[{i}/{len(addresses)}] {query}")
-            tries = 0
-            result = None
-            while tries < args.retries:
-                try:
-                    result = nominatim_geocode(query, args.country, args.timeout, args.user_agent)
-                    break
-                except urllib.error.HTTPError as e:
-                    # Backoff on rate-limit or server errors
-                    wait = args.delay * (2 ** tries)
-                    f_log.write(f"HTTPError for '{query}': {e.code} {e.reason}. Backing off {wait:.1f}s\n")
-                    time.sleep(wait)
-                    tries += 1
-                except Exception as e:
-                    wait = args.delay * (2 ** tries)
-                    f_log.write(f"Error for '{query}': {e}. Backing off {wait:.1f}s\n")
-                    time.sleep(wait)
-                    tries += 1
+        for i, r in enumerate(rows, start=1):
+            lat, lon = cache.get(i, (None, None))
+            r = dict(r)  # copy
+            r["lat"] = lat
+            r["lon"] = lon
+            writer.writerow(r)
 
-            row = {
-                "input_address": addr,
-                "query": f"{addr}, {args.country}" if args.country else addr,
-                "lat": "", "lon": "", "display_name": "",
-                "osm_type": "", "osm_id": "", "class": "", "type": "", "importance": ""
-            }
-            if result:
-                row.update({
-                    "lat": result.get("lat",""),
-                    "lon": result.get("lon",""),
-                    "display_name": result.get("display_name",""),
-                    "osm_type": result.get("osm_type",""),
-                    "osm_id": result.get("osm_id",""),
-                    "class": result.get("class",""),
-                    "type": result.get("type",""),
-                    "importance": result.get("importance",""),
-                })
+
+def main():
+    # 1. Load input rows (DictReader so we can use column names)
+    with open(INPUT_FILE, newline="", encoding="utf-8", errors="replace") as f_in:
+        reader = csv.DictReader(f_in)
+        rows = list(reader)
+
+    if not rows:
+        print("No rows found in input file.")
+        return
+
+    # 2. Load existing cache (if any), keyed by line index
+    cache = load_cache()
+    print(f"Loaded {len(cache)} cached rows from {CACHE_FILE}.")
+
+    total_rows = len(rows)
+    print(f"Total data rows in input (excluding header): {total_rows}")
+
+    session = requests.Session()
+
+    try:
+        # 3. Process rows strictly in line order
+        for i, row in enumerate(rows, start=1):
+            if i in cache:
+                # already processed in a previous run
+                continue
+
+            built_address = build_address(row)
+            print(f"[{i}/{total_rows}] {built_address}")
+
+            if not built_address:
+                lat, lon = None, None
             else:
-                f_log.write(f"NOT FOUND: {query}\n")
-            writer.writerow(row)
-            # polite delay
-            time.sleep(args.delay)
+                try:
+                    lat, lon = geocode(built_address, session)
+                except Exception as e:
+                    print(f"  Error geocoding line {i}: {e}")
+                    lat, lon = None, None
 
-    print(f"Done. Wrote {args.output} and {args.log}")
-    return 0
+            cache[i] = (lat, lon)
+            append_to_cache(i, built_address, lat, lon)
+            print(f"  -> lat={lat}, lon={lon}")
+
+            # Be polite to Nominatim
+            time.sleep(1)
+
+    except KeyboardInterrupt:
+        print("\nInterrupted by user (Ctrl+C).")
+        print("Progress so far is saved in geocode_cache.csv.")
+    finally:
+        # 4. Always regenerate output with whatever we have so far
+        write_output(rows, cache)
+        print(f"Done (partial or full). Wrote {OUTPUT_FILE} from cache.")
+
 
 if __name__ == "__main__":
-    raise SystemExit(main())
-
-# ---------- Optional: Google Maps Geocoding (commented) ----------
-# If you prefer Google Maps, uncomment and adapt the code below.
-# Requires: an environment variable GOOGLE_MAPS_API_KEY or pass as a flag.
-#
-# import requests
-# def google_geocode(query, api_key):
-#     url = "https://maps.googleapis.com/maps/api/geocode/json"
-#     r = requests.get(url, params={"address": query, "key": api_key}, timeout=20)
-#     r.raise_for_status()
-#     js = r.json()
-#     if js.get("status") == "OK" and js.get("results"):
-#         res = js["results"][0]
-#         loc = res["geometry"]["location"]
-#         return {"lat": loc["lat"], "lon": loc["lng"], "display_name": res["formatted_address"]}
-#     return None
+    main()

@@ -12,10 +12,10 @@ if (SHOW_BAR_VALUES && !Chart.registry.plugins.get("showDataValues")) {
 }
 
 /* -------------------------- state & helpers -------------------------- */
-const COLORS=["#1f77b4","#ff7f0e","#2ca02c","#d62728","#9467bd","#8c564b","#e377c2","#7f7f7f","#bcbd22","#17becf","#aec7e8","#ffbb78"];
+const COLORS=["#ABDEE6","#6888FE5","#73A9E5","#7ABDE5","#88D0E5","#95E4E5","#275ccfff","#175d96ff","#366592ff","#667c91ff","#FF968A","#FFAEA6"];
 const REGION_SALESMEN={
-  NSW:["Hamid Jallis","LUTTRELL STEVE","Hulley Gary","Lee Don"],
-  QLD:["Lopez Randall","Spires Steven","Sampson Kieren","Marsh Aaron"],
+  NSW:["Hamid Jallis","LUTTRELL STEVE","Cummings Mark","Lee Don"],
+  QLD:["Maclure Adam","Spires Steven","Sampson Kieren","Marsh Aaron"],
   VIC:["Bellotto Nicola","Bilston Kelley","Gultjaeff Jason","Hobkirk Calvin"],
   WA:["Fruci Davide","Gilbert Michael"]
 };
@@ -28,6 +28,7 @@ const norm = (s) => (s ?? "")
   .trim()
   .toUpperCase();
 
+let topCustomerChartInst = null;
 const filters={
   metric:"qty",
   group_by:"region",
@@ -39,12 +40,29 @@ const filters={
   product_group:"ALL",
   pattern:"ALL",          
   category:"ALL",
-  category_target:"ALL"
+  category_target:"ALL",
+  top_limit: "ALL"   
+};
+
+const mapFilters = {
+  metric:"qty",
+  group_by:"region",
+  region:"ALL",
+  salesman:"ALL",
+  sold_to_group:"ALL",
+  sold_to:"ALL",
+  ship_to:"ALL",          
+  product_group:"ALL",
+  pattern:"ALL",          
+  category:"ALL",
+  category_target:"ALL",
+  top_limit: "ALL"   
 };
 
 let dailyInst,dailyCumInst,monthlyInst,monthlyCumInst,yearlyInst,monthlyTargetInst,
     stackedDailyInst,stackedDailyCumInst, stackedDailyPctInst, stackedDailyCumPctInst, stackedYearlyInst, stackedYearlyPctInst,
     stackedMonthlyInst, stackedMonthlyCumInst, stackedMonthlyPctInst, stackedMonthlyCumPctInst,
+    stackedDailyTargetInst, stackedDailyTargetCumInst, stackedDailyTargetPctInst, stackedDailyTargetCumPctInst,
     stackedMonthlyTargetInst, stackedMonthlyTargetCumInst, stackedMonthlyTargetPctInst, stackedMonthlyTargetCumPctInst;
 
 const $=s=>document.querySelector(s);
@@ -65,7 +83,12 @@ const fetchJSON = async (u) => {
     return [];
   }
 };
-const setActive=(wrap,attr,val)=>[...wrap.querySelectorAll(".btn")].forEach(b=>b.classList.toggle("active",b.dataset[attr]===val));
+const setActive = (wrap, attr, val) => {
+  if (!wrap) return;
+  wrap.querySelectorAll(".btn").forEach(b => {
+    b.classList.toggle("active", b.dataset[attr] === val);
+  });
+};
 function populateSelect(el,arr,includeAll=true){ el.innerHTML=""; if(includeAll){const o=document.createElement("option");o.value="ALL";o.textContent="ALL";el.appendChild(o);} arr.forEach(v=>{const o=document.createElement("option");o.value=v;o.textContent=v;el.appendChild(o);}); }
 function makeStacked(id,labels,datasets,title,max){ return new Chart(document.getElementById(id),{type:"bar",data:{labels,datasets},options:getCommonOptions(true, max, title)}); }
 const monthsLabels=()=>["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
@@ -106,51 +129,31 @@ function populateDatalist(listId, items){
   });
 }
 
-// Try backend endpoint first; if missing, fall back to computing from monthly breakdown
-async function fetchTopSet2025(){
+async function refreshSoldToList() {
   const qs = new URLSearchParams({
+    sold_to_group: filters.sold_to_group || "ALL",
     metric:        filters.metric,
     category:      filters.category,
     region:        filters.region,
     salesman:      filters.salesman,
-    sold_to_group: filters.sold_to_group,
+    sold_to:       filters.sold_to,
+    ship_to:       filters.ship_to,
     product_group: filters.product_group,
-    n: 10
+    pattern:       filters.pattern,
+    top_limit:     filters.top_limit || 0   // 0 = show all
   }).toString();
 
-  // 1) Backend route (if implemented)
-  const rows = await fetchJSON(`/api/top_customers_2025?${qs}`);
-  if (Array.isArray(rows) && rows.length) {
-    return new Set(rows.map(r => norm(r.sold_to_name)));
-  }
+  const soldTo = await fetchJSON("/api/sold_to_names?" + qs);
+  const list   = document.getElementById("sold_to_list");
+  if (!list) return;
 
-  // 2) Fallback: compute from monthly breakdown grouped by sold_to
-  const backupQs = new URLSearchParams({
-    metric:        filters.metric,
-    category:      filters.category,
-    region:        filters.region,
-    salesman:      filters.salesman,
-    sold_to_group: filters.sold_to_group,
-    sold_to:       'ALL',
-    product_group: filters.product_group,
-    group_by:      'sold_to'
-  }).toString();
-
-  const monthlyRows = await fetchJSON(`/api/monthly_breakdown?${backupQs}`);
-  const sumBySoldTo = new Map(); // normalized name -> total
-  monthlyRows.forEach(r => {
-    const k = norm(r.group_label || 'UNKNOWN');
-    sumBySoldTo.set(k, (sumBySoldTo.get(k) || 0) + (+r.value || 0));
+  list.innerHTML = "";
+  soldTo.forEach(n => {
+    const o = document.createElement("option");
+    o.value = n;
+    list.appendChild(o);
   });
-
-  const topNorm = [...sumBySoldTo.entries()]
-    .sort((a,b)=> b[1]-a[1])
-    .slice(0,10)
-    .map(([k]) => k);
-
-  return new Set(topNorm);
 }
-
 async function ensureTopSet(){
   const k = keyForTopSet();
   if (TOP_SET && TOP_SET_KEY === k) return TOP_SET;
@@ -230,7 +233,7 @@ const showDataValuesPlugin = {
     const area = chart.chartArea;
 
     // global defaults; can be overridden per chart via options.plugins.showDataValues
-    const color     = pluginOpts.color ?? "#111";
+    const color     = pluginOpts.color ?? "#232191ff";
     const font      = pluginOpts.font  ?? "10px Arial";
     const offset    = pluginOpts.offset ?? 6;                 // for line points
     const include   = pluginOpts.include ?? ["bar", "line"];  // which types to draw
@@ -320,10 +323,6 @@ function getFilterParams() {
 }
 
 
-
-
-
-
 /* -------------------------- UI wiring -------------------------- */
 document.getElementById('catBtns').addEventListener("click",e=>{
   if(!e.target.classList.contains("btn"))return;
@@ -408,6 +407,26 @@ document.getElementById('pattern').addEventListener('input', (e)=>{
   refreshAllWithKpi();
 });
 
+document.getElementById("topCustomerControls").addEventListener("click", e => {
+  if (!e.target.classList.contains("btn")) return;
+
+  const limit = Number(e.target.dataset.limit || 10);
+  filters.top_limit = limit;   // store as number
+
+  // highlight the active button
+  setActive(
+    document.getElementById("topCustomerControls"),
+    "limit",                  // matches data-limit
+    String(limit)             // dataset values are strings
+  );
+
+  
+  refreshSoldToList();
+
+  // redraw charts / KPI
+  refreshAllWithKpi();
+});
+
 async function refreshShipTo(){
   const stg3 = document.getElementById('sold_to_group').value || 'ALL';
   const sold = document.getElementById('sold_to').value || 'ALL';
@@ -426,9 +445,6 @@ async function refreshPatterns(){
 }
 
 
-// optional debounce helper
-function debounce(fn,ms){let t;return(...a)=>{clearTimeout(t);t=setTimeout(()=>fn(...a),ms)}}
-
 
 
 
@@ -439,48 +455,104 @@ async function fetchDailySales(){
   const qs = new URLSearchParams({
     metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
     sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
-    product_group:filters.product_group, pattern:filters.pattern
+    product_group:filters.product_group, pattern:filters.pattern, top_limit:filters.top_limit ||0
   }).toString();
   return fetchJSON(`/api/daily_sales?${qs}`);
+}
+
+async function fetchDailyKPIActual(region,BDE){
+  const qs=new URLSearchParams({
+    metric:filters.metric, category:filters.category, region:region, salesman:BDE,
+    sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
+    product_group:filters.product_group, pattern:filters.pattern, top_limit:filters.top_limit ||0
+  }).toString();
+  return fetchJSON(`/api/daily_sales?${qs}`);
+}
+
+async function fetchDailyKPITarget(region,BDE){
+  const qs=new URLSearchParams({
+    metric:filters.metric, category:filters.category, region:region, salesman:BDE,
+    sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
+    product_group:filters.product_group, pattern:filters.pattern, top_limit:filters.top_limit ||0
+  }).toString();
+  return fetchJSON(`/api/daily_target?${qs}`);
 }
 
 async function fetchDailyBreakdownWithGroup(groupBy){
   const qs = new URLSearchParams({
     metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
     sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
-    product_group:filters.product_group, pattern:filters.pattern, group_by: groupBy
+    product_group:filters.product_group, pattern:filters.pattern, group_by: groupBy, top_limit:filters.top_limit ||0
   }).toString();
   return fetchJSON(`/api/daily_breakdown?${qs}`);
 }
 
 
-
 // totals (bar + cumulative), same shape as drawDailyTotals (no target for daily)
 async function drawDailyTotals(){
-  const [salesRows] = await Promise.all([ fetchDailySales() ]);
-  const labels   = daysLabels();
-  const sales    = labels.map((_,i)=> +((salesRows[i]?.value) || 0));
-  const salesCum = toCumulative(sales);
+  const [salesRows,targetRows]=await Promise.all([
+    fetchDailySales(),
+    fetchJSON(`/api/daily_target?${new URLSearchParams({
+      metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
+      sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
+      product_group:filters.product_group, pattern:filters.pattern, top_limit:filters.top_limit ||0
+    }).toString()}`)
+  ]);
+  const labels=daysLabels();
+  const sales = salesRows.map(r=>+r.value||0);
+  const targets= targetRows.map(r=>+r.value||0);
+  
+
+
+  // % achievement per month
+  const achievement = labels.map((_, i) =>
+    targets[i] > 0 ? (sales[i] / targets[i]) * 100 : null
+  );
+  const salesCum=toCumulative(sales), targetCum=toCumulative(targets);
+  const cumAchievement = labels.map((_, i) =>
+    targets[i] > 0 ? (salesCum[i] / targetCum[i]) * 100 : null
+  );
 
   [dailyInst,dailyCumInst].forEach(c=>c&&c.destroy());
-
-
-  dailyInst = new Chart(document.getElementById("dailyChart"), {
+  //if (!Chart.registry.plugins.get("showDataValues")) {
+  //  Chart.register(showDataValuesPlugin);
+  //}
+  
+  
+  dailyInst=new Chart(document.getElementById("dailyChart"),{
+      type:"bar",
+      data:{labels,datasets:[
+        {label:"Achievement(%)",type:"line", data: achievement,  yAxisID: "y1", borderWidth:2,pointRadius:0,borderColor:"#ef4444",  datalabels: {
+            display: true,
+            align: "top",
+            anchor: "end",
+            formatter: v => v == null ? "" : v.toFixed(1) + "%"
+          }
+        },
+        {label:filters.metric==="amount"?"Sales Amount":"SalesQty",data:sales, backgroundColor:"#ABDEE6", categoryPercentage:0.9, barPercentage:0.9, z:0, datalabels: {
+            display: false}},
+        {label:"Target",type:"bar",data:targets, borderWidth:2, borderColor:"#ABDEE6",datalabels: {
+            display: false}}
+        
+      ]},
+      options:getCommonOptions(false)
+    });
+    
+  dailyCumInst=new Chart(document.getElementById("dailyCumChart"),{
     type:"bar",
-    data:{ labels, datasets:[
-      { label: filters.metric==="amount"?"Daily Amount":"Daily Qty",
-        data:sales, backgroundColor:"#93c5fd", categoryPercentage:0.9, barPercentage:0.9 }
+    data:{labels,datasets:[
+      {label:"Achievement(%)",type:"line", data: cumAchievement,  yAxisID: "y1", borderWidth:2,pointRadius:0,borderColor:"#ef4444", datalabels: {
+          display: true,
+          align: "top",
+          anchor: "end",
+          formatter: v => v == null ? "" : v.toFixed(1) + "%"
+      }},
+      {label:filters.metric==="amount"?"Cumulative Amount":"Cumulative Qty",data:salesCum,backgroundColor:"#ABDEE6", categoryPercentage:0.9, barPercentage:0.9, datalabels: {
+          display: false}},
+      {label:"Cumulative Target",type:"bar",data:targetCum,borderWidth:2,borderWidth:2, borderColor:"#ABDEE6", datalabels: {
+          display: false}}      
     ]},
-    options:getCommonOptions(false, undefined, "Daily")
-  });
-
-  dailyCumInst = new Chart(document.getElementById("dailyCumChart"), {
-    type:"bar",
-    data:{ labels, datasets:[
-      { label: filters.metric==="amount"?"Cumulative Amount":"Cumulative Qty",
-        data:salesCum, backgroundColor:"#34d399", categoryPercentage:0.9, barPercentage:0.9 }
-    ]},
-    options:getCommonOptions(false, undefined, "Cumulative")
+    options:getCommonOptions(false)
   });
 }
 
@@ -586,20 +658,140 @@ async function drawDailyStacked(){
 }
 
 /* -------------------------- monthly charts -------------------------- */
-
 async function fetchMonthlySales(){
-  const qs=new URLSearchParams({
+  const qs = new URLSearchParams({
     metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
     sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
-    product_group:filters.product_group, pattern:filters.pattern
+    product_group:filters.product_group, pattern:filters.pattern, top_limit:filters.top_limit ||0
+  }).toString();
+  return fetchJSON(`/api/monthly_sales?'${qs}`);
+}
+
+// helpers
+const quarterOf = m => Math.floor(m/3); // 0..3 for Jan..Dec
+function kpiByQuarter(sales, targets){
+  const s=[0,0,0,0], t=[0,0,0,0];
+  for (let m=0;m<12;m++){ const q=quarterOf(m); s[q]+=+sales[m]||0; t[q]+=+targets[m]||0; }
+  return t.map((tv,i)=> tv>0 ? +(s[i]/tv*100).toFixed(1) : null); // [%]
+}
+
+async function fetchMonthlyKPIActual(region,BDE){
+  const qs=new URLSearchParams({
+    metric:filters.metric, category:filters.category, region:region, salesman:BDE,
+    sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
+    product_group:filters.product_group, pattern:filters.pattern, top_limit:filters.top_limit ||0
   }).toString();
   return fetchJSON(`/api/monthly_sales?${qs}`);
+}
+async function fetchMonthlyKPITarget(region,BDE){
+  const qs=new URLSearchParams({
+    metric:filters.metric, category:filters.category, region:region, salesman:BDE,
+    sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
+    product_group:filters.product_group, pattern:filters.pattern, top_limit:filters.top_limit ||0
+  }).toString();
+  return fetchJSON(`/api/monthly_target?${qs}`);
+}
+
+// build & render table
+async function drawMonthlyKPI(){
+  const rows = [];
+
+  // All row (no region/salesman filter)
+  {
+    const qsSales = new URLSearchParams({
+      metric: filters.metric, category: filters.category, region: "ALL", salesman:"ALL",
+      sold_to_group: filters.sold_to_group, sold_to: filters.sold_to, ship_to: filters.ship_to,
+      product_group: filters.product_group, pattern: filters.pattern, top_limit:filters.top_limit ||0
+    }).toString();
+    const qsTarget = new URLSearchParams({
+      metric: filters.metric,
+      category: filters.category, region: "ALL", salesman:"ALL",
+      sold_to_group: filters.sold_to_group, sold_to: filters.sold_to, ship_to: filters.ship_to,
+      product_group: filters.product_group, pattern: filters.pattern, top_limit:filters.top_limit ||0
+    }).toString();
+
+    const [salesRows, targetRows] = await Promise.all([
+      fetchJSON(`/api/monthly_sales?${qsSales}`),
+      fetchJSON(`/api/monthly_target?${qsTarget}`)
+    ]);
+    const sales   = salesRows.map(r => +r.value || 0);
+    const targets = targetRows.map(r => +r.value || 0);
+    const q = kpiByQuarter(sales, targets);
+    rows.push({ region: "All", Q1: q[0], Q2: q[1], Q3: q[2], Q4: q[3] });
+  }
+
+  // Region / BDE rows
+  for (const region of ["NSW","QLD","VIC","WA"]) {
+    const bdes = REGION_SALESMEN[region] || []; // e.g. ["BDE2","BDE3"] or ids
+    // fetch each BDE pair in parallel, then append in order
+    const perBDE = await Promise.all(bdes.map(async (bde) => {
+      const [salesRows, targetRows] = await Promise.all([
+        fetchMonthlyKPIActual(region, bde),
+        fetchMonthlyKPITarget(region, bde)
+      ]);
+      const sales   = salesRows.map(r => +r.value || 0);
+      const targets = targetRows.map(r => +r.value || 0);
+      const q = kpiByQuarter(sales, targets);
+      return { region: `${region}` , bde:`${bde}`, Q1: q[0], Q2: q[1], Q3: q[2], Q4: q[3] };
+    }));
+    rows.push(...perBDE);
+  }
+
+  // render table
+const el = document.getElementById("kpiByRegion");
+if (!el) return;
+
+const fmt = v => v == null ? "-" : v.toFixed(1) + "%";
+
+// light background per region
+const REGION_BG = {
+  ALL: "#f3f4f6",  // light grey
+  NSW: "#eff6ff",  // light blue
+  QLD: "#fff7ed",  // light orange
+  VIC: "#ecfdf3",  // light green
+  WA:  "#fef2f2"   // light red
+};
+const rowBg = region => REGION_BG[region] || "#ffffff";
+
+// font colour based on achievement %
+const cellHtml = (v) => {
+  if (v == null) {
+    return `<td style="text-align:right;color:#9ca3af">-</td>`;
+  }
+  const val = Number(v);
+  let color;
+  if (val >= 100)      color = "#16a34a"; // green
+  else if (val >= 90)  color = "#f97316"; // orange
+  else                 color = "#dc2626"; // red
+  return `<td style="text-align:right;color:${color}">${fmt(val)}</td>`;
+};
+
+el.innerHTML = `
+  <thead><tr>
+    <th style="text-align:center">Region</th>
+    <th style="text-align:center">BDE</th>
+    <th style="text-align:right">Q1</th>
+    <th style="text-align:right">Q2</th>
+    <th style="text-align:right">Q3</th>
+    <th style="text-align:right">Q4</th>
+  </tr></thead>
+  <tbody>
+    ${rows.map(r => `
+      <tr style="background-color:${rowBg(r.region)}">
+        <td style="text-align:center">${r.region}</td>
+        <td style="text-align:center">${r.bde}</td>
+        ${cellHtml(r.Q1)}
+        ${cellHtml(r.Q2)}
+        ${cellHtml(r.Q3)}
+        ${cellHtml(r.Q4)}
+      </tr>`).join("")}
+  </tbody>`;
 }
 async function fetchMonthlyBreakdownWithGroup(groupBy){
   const params = {
     metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
     sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
-    product_group:filters.product_group, pattern:filters.pattern, group_by: groupBy
+    product_group:filters.product_group, pattern:filters.pattern, group_by: groupBy, top_limit:filters.top_limit ||0
   };
   const qs=new URLSearchParams(params).toString();
   return fetchJSON(`/api/monthly_breakdown?${qs}`);
@@ -611,48 +803,70 @@ async function drawMonthlyTotals(){
     fetchJSON(`/api/monthly_target?${new URLSearchParams({
       metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
       sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
-      product_group:filters.product_group, pattern:filters.pattern
+      product_group:filters.product_group, pattern:filters.pattern, top_limit:filters.top_limit ||0
     }).toString()}`)
   ]);
   const labels=monthsLabels();
   const sales = salesRows.map(r=>+r.value||0);
   const targets= targetRows.map(r=>+r.value||0);
   
+
+
   // % achievement per month
   const achievement = labels.map((_, i) =>
     targets[i] > 0 ? (sales[i] / targets[i]) * 100 : null
   );
   const salesCum=toCumulative(sales), targetCum=toCumulative(targets);
+  const cumAchievement = labels.map((_, i) =>
+    targets[i] > 0 ? (salesCum[i] / targetCum[i]) * 100 : null
+  );
 
   [monthlyInst,monthlyCumInst].forEach(c=>c&&c.destroy());
-  if (!Chart.registry.plugins.get("showDataValues")) {
-    Chart.register(showDataValuesPlugin);
-  }
+  //if (!Chart.registry.plugins.get("showDataValues")) {
+  //  Chart.register(showDataValuesPlugin);
+  //}
   monthlyInst=new Chart(document.getElementById("monthlyChart"),{
     type:"bar",
     data:{labels,datasets:[
-      {label:filters.metric==="amount"?"Sales Amount":"SalesQty",data:sales, backgroundColor:"#93c5fd", categoryPercentage:0.9, barPercentage:0.9, order: 1, z:0 },
-      {label:"Target",type:"bar",data:targets, borderWidth:2, borderColor:"#6644efff"  },
-      {label:"Achievement(%)",type:"line", data: achievement,  yAxisID: "y1", borderWidth:2,pointRadius:0,borderColor:"#ef4444"}
+      {label:"Achievement(%)",type:"line", data: achievement,  yAxisID: "y1", borderWidth:2,pointRadius:0,borderColor:"#ef4444",  datalabels: {
+          display: true,
+          align: "top",
+          anchor: "end",
+          formatter: v => v == null ? "" : v.toFixed(1) + "%"
+        }
+      },
+      {label:filters.metric==="amount"?"Sales Amount":"SalesQty",data:sales, backgroundColor:"#ABDEE6", categoryPercentage:0.9, barPercentage:0.9, z:0, datalabels: {
+          display: false}},
+      {label:"Target",type:"bar",data:targets, borderWidth:2, borderColor:"#ABDEE6",datalabels: {
+          display: false}}
     ]},
     options:getCommonOptions(false)
   });
   monthlyCumInst=new Chart(document.getElementById("monthlyCumChart"),{
     type:"bar",
     data:{labels,datasets:[
-      {label:filters.metric==="amount"?"Cumulative Amount":"Cumulative Qty",data:salesCum,backgroundColor:"#34d399", categoryPercentage:0.9, barPercentage:0.9},
-      {label:"Cumulative Target",type:"line",data:targetCum,borderWidth:2,pointRadius:0,borderColor:"#ef4444"}
+      {label:"Achievement(%)",type:"line", data: cumAchievement,  yAxisID: "y1", borderWidth:2,pointRadius:0,borderColor:"#ef4444", datalabels: {
+          display: true,
+          align: "top",
+          anchor: "end",
+          formatter: v => v == null ? "" : v.toFixed(1) + "%"
+        }},
+      {label:filters.metric==="amount"?"Cumulative Amount":"Cumulative Qty",data:salesCum,backgroundColor:"#ABDEE6", categoryPercentage:0.9, barPercentage:0.9, datalabels: {
+          display: false}},
+      {label:"Cumulative Target",type:"bar",data:targetCum,borderWidth:2,borderWidth:2, borderColor:"#ABDEE6", datalabels: {
+          display: false}} 
     ]},
     options:getCommonOptions(false)
   });
 }
-
+  
 function buildMonthlyStacks(rows){
   const labels=monthsLabels();
   const groups=[...new Set(rows.map(r=>r.group_label))];
   const byGroup={}; groups.forEach(g=>byGroup[g]=Array(12).fill(0));
   rows.forEach(r=>{ const m=parseInt(r.month,10); if(m>=1 && m<=12){ byGroup[r.group_label][m-1]+= (+r.value||0); } });
-  const datasets=groups.map((g,i)=>({label:g,data:byGroup[g],backgroundColor:COLORS[i%COLORS.length],stack:"S", categoryPercentage:0.9, barPercentage:0.9}));
+  const datasets=groups.map((g,i)=>({label:g,data:byGroup[g],backgroundColor:COLORS[i%COLORS.length],stack:"S", categoryPercentage:0.9, barPercentage:0.9, datalabels: {
+          display: false}}));
   return {labels,groups,byGroup,datasets};
 }
 
@@ -665,6 +879,7 @@ function toPercentStacks(byKey){
   }
   return pct;
 }
+
 
 async function drawMonthlyStacked(){
   // Respect user’s Group By; only reduce when Group By = sold_to and Top10 active
@@ -737,7 +952,8 @@ async function fetchYearlySales() {
     sold_to:       filters.sold_to,
     ship_to:       filters.ship_to,
     product_group: filters.product_group,
-    pattern:       filters.pattern
+    pattern:       filters.pattern,
+    top_limit:filters.top_limit ||0
   }).toString();
   return fetchJSON(`/api/yearly_sales?${qs}`);
 }
@@ -753,6 +969,7 @@ async function fetchYearlyBreakdownWithGroup(groupBy) {
     ship_to:       filters.ship_to,
     product_group: filters.product_group,
     pattern:       filters.pattern,
+    top_limit:filters.top_limit ||0,
     group_by:      groupBy
   }).toString();
   return fetchJSON(`/api/yearly_breakdown?${qs}`);
@@ -781,7 +998,7 @@ async function drawYearlyTotals() {
         {
           label: filters.metric === "amount" ? "Yearly Amount" : "Yearly Qty",
           data,
-          backgroundColor: "#93c5fd",
+          backgroundColor: "#ABDEE6",
           categoryPercentage: 0.9,
           barPercentage: 0.9
         }
@@ -943,128 +1160,8 @@ async function initControls(){
   populateSelect(document.getElementById('sold_to_group'), stg3, true);
   document.getElementById('sold_to_group').value = "ALL";
 
-  const soldTo=await fetchJSON("/api/sold_to_names?sold_to_group=ALL");
-  const list = document.getElementById('sold_to_list');
-  list.innerHTML = '';
-  soldTo.forEach(n => { const o=document.createElement('option'); o.value=n; list.appendChild(o); });
-  await refreshShipTo(); // show ALL ship-to names initially
-
-}
-/* ---------------------- FAST KPI TABLE (robust) ---------------------- */
-
-/* helpers */
-const __fmtInt = n => (Math.round(+n || 0)).toLocaleString();
-const __pctClass = v => v>=80 ? 'kpi-good' : (v>=60 ? 'kpi-ok' : 'kpi-bad');
-
-function kpiQS() {
-  const base = {
-    metric:        filters.metric,
-    category:      filters.category,
-    region:        filters.region,
-    sold_to_group: filters.sold_to_group,
-    sold_to:       filters.sold_to,
-    ship_to:       filters.ship_to,
-    product_group: filters.product_group,
-    pattern:       filters.pattern
- ,
-    salesman:      filters.salesman
-  };
-  return new URLSearchParams(base).toString();
-}
-
-const __kpiCache = new Map();
-async function fetchKpiSnapshot() {
-  const qs = kpiQS();
-  if (__kpiCache.has(qs)) return __kpiCache.get(qs);
-  const data = await fetchJSON(`/api/kpi_snapshot?${qs}`);
-  __kpiCache.set(qs, data);
-  return data;
-}
-
-/* Ensure/return the container we render into */
-function ensureKpiContainer() {
-  let wrap = document.getElementById('kpiRegionGrid');
-  if (!wrap) {
-    // Try a parent holder first
-    const holder =
-      document.getElementById('kpiRegionGridWrap') ||
-      document.querySelector('#kpiRegionGridWrap') ||
-      document.body;
-
-    wrap = document.createElement('div');
-    wrap.id = 'kpiRegionGrid';
-    holder.appendChild(wrap);
-  }
-  return wrap;
-}
-
-function rowHtml(name, pack, isHeader=false) {
-  const cell = (obj) =>
-    `<td class="num">
-       <div class="pct ${__pctClass(+obj.p||0)}">${__fmtInt(obj.p)}%</div>
-       <div class="mini">${__fmtInt(obj.a)} / ${__fmtInt(obj.t)}</div>
-     </td>`;
-  return `
-    <tr class="${isHeader?'is-overall':''}">
-      <td class="name">${name ?? ''}</td>
-      ${cell(pack.jul)}${cell(pack.q1)}${cell(pack.q2)}${cell(pack.q3)}
-    </tr>`;
-}
-
-function smallTableHtml(caption, rowsHtml) {
-  return `
-    <div class="region-table-box">
-      <div class="region-caption">${caption ?? ''}</div>
-      <table class="kpi-table">
-        <thead>
-          <tr>
-            <th class="name-col">Name</th>
-            <th>Jul</th>
-            <th>Q1</th>
-            <th>Q2</th>
-            <th>Q3-to-date</th>
-          </tr>
-        </thead>
-        <tbody>${rowsHtml}</tbody>
-      </table>
-    </div>`;
-}
-
-async function renderFastKpiTable() {
-  const wrap = ensureKpiContainer();
-  wrap.innerHTML = '<div class="muted">Loading KPI…</div>';
-
-  try {
-    const snap = await fetchKpiSnapshot();
-    if (!snap || snap.error) {
-      console.warn('kpi_snapshot returned no data or error:', snap?.error);
-      wrap.innerHTML = '<div class="muted">No KPI data.</div>';
-      return;
-    }
-
-    // Overall
-  let html = smallTableHtml('Overall', rowHtml('All', snap.overall, true));
-
-  // Regions (respect filters.region)
-  const regions = Array.isArray(snap.regions) ? snap.regions : [];
-  const filteredRegions = (filters.region && filters.region !== 'ALL') ? regions.filter(r => String(r.region||'').toUpperCase() === String(filters.region||'').toUpperCase()) : regions;
-  html += filteredRegions.map(r => {
-      const caption = r.region ?? 'Region';
-      let rows = rowHtml(r.region ?? 'Region', r.kpi || { jul:{a:0,t:0,p:0}, q1:{a:0,t:0,p:0}, q2:{a:0,t:0,p:0}, q3:{a:0,t:0,p:0} }, true);
-      let salesmen = Array.isArray(r.salesmen) ? r.salesmen : [];
-      if (filters.salesman && filters.salesman !== 'ALL') {
-        salesmen = salesmen.filter(s => (s.name||'') === filters.salesman);
-      }
-      salesmen.forEach(s => { rows += rowHtml(s.name ?? 'UNK', s); });
-      return smallTableHtml(caption, rows);
-    }).join('');
-
-    wrap.innerHTML = html;
-  } catch (e) {
-    console.error('renderFastKpiTable failed:', e);
-    wrap.innerHTML = '<div class="muted">Failed to load KPIs.</div>';
-    showError(`KPI table error: ${e.message || e}`);
-  }
+  await refreshSoldToList();
+  await refreshShipTo();
 }
 
 /* ===================== PROFIT (COMBINED) ===================== */
@@ -1183,7 +1280,7 @@ function renderProfitCombined(rows) {
         }
       },
       plugins: {
-        datalabels: false,
+        datalabels: true,
         legend: { display: true },
         tooltip: {
           callbacks: {
@@ -1210,7 +1307,8 @@ async function loadProfit() {
     sold_to:       filters.sold_to,
     ship_to:       filters.ship_to,
     product_group: filters.product_group,
-    pattern:       filters.pattern
+    pattern:       filters.pattern,
+    top_limit:filters.top_limit ||0
   }).toString();
 
   const rows = await fetchJSON(`/api/profit_monthly?${qs}`);
@@ -1220,23 +1318,21 @@ async function loadProfit() {
 /* =================== END PROFIT (COMBINED) =================== */
 
 
-
-
 async function refreshAllWithKpi(){
   await drawDailyTotals(),          // now uses October data internally
   await drawDailyStacked(),
+  await drawMonthlyKPI();
   await drawMonthlyTotals();
   await drawMonthlyStacked();
   await loadProfit();
   await drawYearlyTotals();
   await drawYearlyStacked();
-  await renderFastKpiTable();
-  await loadProfit();
-  
+  await drawTopCustomers();
 }
 
 (async function start(){
   await initControls();
+  initSalesMap();
   [...document.querySelectorAll("#catBtns .btn")].forEach(b=>b.classList.toggle("active",b.dataset.val===filters.category));
   await refreshAllWithKpi();
   

@@ -5,11 +5,9 @@ h1, h2 { margin: 6px 0; color:#333; }
 .btn { padding:2px 4px; border:1px solid #ccc; background:#fafafa; border-radius:6px; cursor:pointer; }
 .btn.active { background:#0a66ff; color:#fff; border-color:#0a66ff; }
 select { padding:6px 10px; }
-label { font-size:12px; color:#666; margin-right:4px; }
+label { font-size:12px; color:#666; margin-right:4px;}
 .chart-row { display:flex; gap:4px; flex-wrap:nowrap; }
 .box { background:#fff; border-radius:8px; box-shadow:0 1px 3px rgba(0,0,0,.06); padding:12px; flex:1 1 calc(25% - 12px); min-width:0; }
-
-
 
 /* Region row: region card at left, its salesmen at right */
 /* rows that contain a left KPI, a grid of cards and trailing quarter chips */
@@ -160,3 +158,40 @@ tr.is-region  > td{ border-top:2px solid #ececec; }
 
 /* Make the small “actual / target” line smaller */
 #kpiRegionGridWrap .kpi-table .mini { font-size:10px; }
+#mapLayout {
+  display: flex;
+  height: calc(100vh - 80px); /* adjust to your header height */
+}
+
+#mapWrapper {
+  flex: 2;              /* map: ~2/3 width */
+}
+
+#salesMap {
+  width: 100%;
+  height: 100%;
+}
+
+#mapWrapper {
+  flex: 1;                 /* map takes remaining space */
+}
+
+#mapSidePanel {
+  flex: 0 0 480px;         /* fixed ~480px wide pane (make 500, 520, etc if you want more) */
+  max-width: none;         /* remove the 420px cap */
+  padding: 8px 12px;
+  background: #f9fafb;
+  overflow-y: auto;
+}
+
+/* Wrap each canvas in a container */
+.chartPane {
+  flex: 1 1 0;      /* each takes half of the panel height */
+  min-height: 140px;
+}
+
+/* Canvas fills its pane (and is not taller than it) */
+.chartPane canvas {
+  width: 100%;
+  height: 100% !important;
+}
