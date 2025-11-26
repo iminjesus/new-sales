@@ -9,16 +9,50 @@ USE_SQLITE = os.environ.get("USE_SQLITE") == "1"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SQLITE_PATH = os.path.join(BASE_DIR, "snapshot.db")
 
+class SQLiteCursorWrapper:
+    def __init__(self, cursor):
+        self._cursor = cursor
+
+    def execute(self, sql, params=None):
+        # Replace MySQL-style "%s" with SQLite "?" placeholders
+        if "%s" in sql:
+            sql = sql.replace("%s", "?")
+        if params is None:
+            return self._cursor.execute(sql)
+        return self._cursor.execute(sql, params)
+
+    def executemany(self, sql, seq_of_params):
+        if "%s" in sql:
+            sql = sql.replace("%s", "?")
+        return self._cursor.executemany(sql, seq_of_params)
+
+    def fetchall(self):
+        rows = self._cursor.fetchall()
+        # convert sqlite3.Row → dict for jsonify
+        return [dict(r) for r in rows]
+
+    def fetchone(self):
+        r = self._cursor.fetchone()
+        return dict(r) if r is not None else None
+
+    def __iter__(self):
+        for r in self._cursor:
+            yield dict(r)
+
+    def __getattr__(self, name):
+        return getattr(self._cursor, name)
+
+
 class SQLiteConnectionWrapper:
     def __init__(self, conn):
         self._conn = conn
 
     def cursor(self, *args, **kwargs):
-        # ignore any "dictionary=" kwarg that mysql.connector uses
+        # ignore dictionary=True from mysql style
         kwargs.pop("dictionary", None)
-        return self._conn.cursor(*args, **kwargs)
+        cur = self._conn.cursor(*args, **kwargs)
+        return SQLiteCursorWrapper(cur)
 
-    # delegate everything else to the real connection
     def __getattr__(self, name):
         return getattr(self._conn, name)
 
