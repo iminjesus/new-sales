@@ -1,9 +1,13 @@
 from flask import Flask, request, jsonify, send_from_directory
+import sqlite3
 import mysql.connector
 from time import time  # cache timestamps
 import os
 from flask_cors import CORS
 
+USE_SQLITE = os.environ.get("USE_SQLITE") == "1"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+SQLITE_PATH = os.path.join(BASE_DIR, "snapshot.db")
 
 
 # --------------------------- tiny cache (unchanged) ---------------------------
@@ -194,12 +198,19 @@ app = Flask(__name__, static_folder="static")
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 def get_connection():
+    # If USE_SQLITE=1 (on Render), use the local snapshot.db file
+    if USE_SQLITE:
+        conn = sqlite3.connect(SQLITE_PATH)
+        conn.row_factory = sqlite3.Row  # rows behave like dicts
+        return conn
+
+    # Otherwise use MySQL (your current local setup)
     cfg = {
         "host": os.getenv("DB_HOST", "127.0.0.1"),
         "port": int(os.getenv("DB_PORT", "3306")),
         "user": os.getenv("DB_USER", "root"),
         "password": os.getenv("DB_PASS", ""),
-        "database": os.getenv("DB_NAME", "my_new_database"),
+        "database": os.getenv("DB_NAME", "my_new_database"),  # change to your real db
         "autocommit": True,
     }
     try:
